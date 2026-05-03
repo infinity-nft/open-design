@@ -7,6 +7,8 @@ import type { DesktopExportPdfInput, DesktopExportPdfResult } from "@open-design
 
 import { exportPdfFromHtml } from "./pdf-export.js";
 
+import { WINDOW_WEB_PREFERENCES } from "./window-options.js";
+
 const PENDING_POLL_MS = 120;
 const RUNNING_POLL_MS = 2000;
 const MAX_CONSOLE_ENTRIES = 200;
@@ -301,12 +303,7 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     show: true,
     title: "Open Design",
     ...MAC_WINDOW_CHROME,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      preload: preloadPath,
-    },
+    webPreferences: WINDOW_WEB_PREFERENCES,
     width: 1280,
   });
   installWindowChromeCssHook(window);

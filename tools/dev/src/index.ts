@@ -60,6 +60,7 @@ import {
   waitForDesktopRuntime,
   waitForWebRuntime,
 } from "./sidecar-client.js";
+import { runSupervisor } from "./supervisor.js";
 
 type CliOptions = ToolDevOptions & {
   expr?: string;
@@ -878,10 +879,25 @@ async function runForeground(config: ToolDevConfig, appName: string | undefined,
 
   let shuttingDown = false;
   const keepAlive = setInterval(() => undefined, 60_000);
+  const abort = new AbortController();
+  const lookup = runtimeLookup(config);
+
+  const onRestart = async (target: ToolDevAppName) => {
+    await stopApp(config, target).catch(() => undefined);
+    await startApp(config, target, foregroundOptions);
+  };
+
+  const supervisorPromises = targets.map((target) =>
+    runSupervisor({ appName: target, lookup, signal: abort.signal, onRestart }).catch((err) => {
+      process.stderr.write(`[supervisor] ${target}: ${err instanceof Error ? err.message : String(err)}\n`);
+    }),
+  );
+
   await new Promise<void>((resolveDone) => {
     const shutdown = () => {
       if (shuttingDown) return;
       shuttingDown = true;
+      abort.abort();
       clearInterval(keepAlive);
       process.stderr.write("\nStopping Open Design dev server...\n");
       void runSequential(stopOrderFor(targets), (target) => stopApp(config, target)).finally(() => {
@@ -896,6 +912,8 @@ async function runForeground(config: ToolDevConfig, appName: string | undefined,
       process.on(sig, shutdown);
     }
   });
+
+  await Promise.allSettled(supervisorPromises);
 }
 
 const cli = cac("tools-dev");

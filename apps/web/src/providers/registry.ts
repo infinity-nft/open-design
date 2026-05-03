@@ -191,6 +191,168 @@ export async function fetchDesignSystem(id: string): Promise<DesignSystemDetail 
   }
 }
 
+// --- Project references (T2.1) ---------------------------------------
+
+export interface ProjectReference {
+  id: string;
+  kind: 'design-system' | 'screenshot' | 'url' | 'figma';
+  value: string;
+  label: string | null;
+  note: string | null;
+  createdAt: number;
+}
+
+export async function fetchProjectReferences(projectId: string): Promise<ProjectReference[]> {
+  try {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/references`);
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as { references?: ProjectReference[] };
+    return json.references ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function toggleProjectReference(
+  projectId: string,
+  input: { kind: ProjectReference['kind']; value: string; label?: string | null; note?: string | null },
+): Promise<{ state: 'added' | 'removed'; reference?: ProjectReference }> {
+  const resp = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/references/toggle`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  if (!resp.ok) return { state: 'removed' };
+  return (await resp.json()) as { state: 'added' | 'removed'; reference?: ProjectReference };
+}
+
+export async function removeProjectReference(
+  projectId: string,
+  refId: string,
+): Promise<boolean> {
+  try {
+    const resp = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(refId)}`,
+      { method: 'DELETE' },
+    );
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+// --- Taste memory inspector (T2.2) -----------------------------------
+
+export interface TasteAggregate {
+  subject: string;
+  score: number;
+  count: number;
+  positive: number;
+  negative: number;
+  confidence: 'high' | 'medium' | 'low';
+  lastSignalAt: number;
+}
+
+export interface TasteSignal {
+  id: string;
+  scope: string;
+  projectId: string | null;
+  sessionId: string | null;
+  subject: string;
+  polarity: number;
+  source: string;
+  createdAt: number;
+}
+
+export async function fetchTasteAggregates(
+  scope: 'user' | 'project' | 'session',
+  id?: string | null,
+): Promise<TasteAggregate[]> {
+  try {
+    const params = new URLSearchParams({ scope });
+    if (id) params.set(scope === 'project' ? 'projectId' : 'sessionId', id);
+    const resp = await fetch(`/api/taste/aggregate?${params}`);
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as { aggregates?: TasteAggregate[] };
+    return json.aggregates ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchTasteSignals(
+  scope: 'user' | 'project' | 'session',
+  id?: string | null,
+  limit = 200,
+): Promise<TasteSignal[]> {
+  try {
+    const params = new URLSearchParams({ scope, limit: String(limit) });
+    if (id) params.set('id', id);
+    const resp = await fetch(`/api/taste/signals?${params}`);
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as { signals?: TasteSignal[] };
+    return json.signals ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteTasteSignal(id: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/taste/signals/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function clearTasteScope(
+  scope: 'user' | 'project' | 'session',
+  id?: string | null,
+): Promise<boolean> {
+  try {
+    const params = new URLSearchParams();
+    if (id) params.set('id', id);
+    const qs = params.toString();
+    const resp = await fetch(
+      `/api/taste/scope/${encodeURIComponent(scope)}${qs ? `?${qs}` : ''}`,
+      { method: 'DELETE' },
+    );
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+// --- Explicit user feedback (T2.3) -----------------------------------
+
+export interface FeedbackInput {
+  polarity: 1 | -1;
+  projectId?: string | null;
+  conversationId?: string | null;
+  runId?: string | null;
+  skillId?: string | null;
+  designSystemId?: string | null;
+  /** Optional one-line explanation (≤500 chars). Stored in the signal payload. */
+  why?: string | null;
+}
+
+export async function postFeedback(input: FeedbackInput): Promise<boolean> {
+  try {
+    const resp = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchPromptTemplates(): Promise<PromptTemplateSummary[]> {
   try {
     const resp = await fetch('/api/prompt-templates');

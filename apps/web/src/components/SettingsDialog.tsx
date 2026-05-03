@@ -60,6 +60,7 @@ import {
   requestNotificationPermission,
   showCompletionNotification,
 } from '../utils/notifications';
+import { TasteMemoryTab } from './TasteMemoryTab';
 
 export type SettingsSection =
   | 'execution'
@@ -74,6 +75,7 @@ export type SettingsSection =
   | 'pet'
   | 'library'
   | 'privacy'
+  | 'taste'
   | 'about';
 
 interface Props {
@@ -108,6 +110,7 @@ interface Props {
    * saved state with `''` before the daemon's response lands.
    */
   composioConfigLoading?: boolean;
+  projectId?: string | null;
   onClose: () => void;
   onRefreshAgents: (
     options?: AgentRefreshOptions,
@@ -563,6 +566,7 @@ export function SettingsDialog({
   onPersist,
   onPersistComposioKey,
   composioConfigLoading = false,
+  projectId,
   onClose,
   onRefreshAgents,
 }: Props) {
@@ -1291,6 +1295,17 @@ export function SettingsDialog({
             </button>
             <button
               type="button"
+              className={`settings-nav-item${activeSection === 'taste' ? ' active' : ''}`}
+              onClick={() => setActiveSection('taste')}
+            >
+              <Icon name="sparkles" size={18} />
+              <span>
+                <strong>Taste memory</strong>
+                <small>Personalisation signals</small>
+              </span>
+            </button>
+            <button
+              type="button"
               className={`settings-nav-item${activeSection === 'about' ? ' active' : ''}`}
               onClick={() => setActiveSection('about')}
             >
@@ -1988,6 +2003,10 @@ export function SettingsDialog({
 
           {activeSection === 'privacy' ? (
             <PrivacySection cfg={cfg} setCfg={setCfg} />
+          ) : null}
+
+          {activeSection === 'taste' ? (
+            <TasteMemoryTab projectId={projectId} />
           ) : null}
 
           {activeSection === 'about' ? (

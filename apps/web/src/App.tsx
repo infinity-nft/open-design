@@ -776,6 +776,7 @@ export function App() {
           composioConfigLoading={composioConfigLoading}
           onPersist={handleConfigPersist}
           onPersistComposioKey={handleConfigPersistComposioKey}
+          projectId={activeProject?.id ?? null}
           onClose={() => {
             // Closing the dialog is the canonical "I'm done" gesture
             // now that there is no global Save button. We mark
