@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { BrowserWindow } from "electron";
+import { BrowserWindow, dialog, ipcMain } from "electron";
 
 import { WINDOW_WEB_PREFERENCES } from "./window-options.js";
 
@@ -207,13 +208,22 @@ function attachDownloadSaveAsDialog(window: BrowserWindow): void {
 }
 
 export async function createDesktopRuntime(options: DesktopRuntimeOptions): Promise<DesktopRuntime> {
+  const preloadPath = join(dirname(fileURLToPath(import.meta.url)), "preload.cjs");
+
+  if (!ipcMain.eventNames().includes("dialog:pick-folder")) {
+    ipcMain.handle("dialog:pick-folder", async () => {
+      const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+    });
+  }
+
   const consoleEntries: DesktopConsoleEntry[] = [];
   const window = new BrowserWindow({
     height: 900,
     show: true,
     title: "Open Design",
     ...MAC_WINDOW_CHROME,
-    webPreferences: WINDOW_WEB_PREFERENCES,
+    webPreferences: { ...WINDOW_WEB_PREFERENCES, preload: preloadPath },
     width: 1280,
   });
   installWindowChromeCssHook(window);

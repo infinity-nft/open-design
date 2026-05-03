@@ -68,9 +68,12 @@ import {
 } from './media-models.js';
 import { readMaskedConfig, writeConfig } from './media-config.js';
 import {
+  collectDesignFiles,
   decodeMultipartFilename,
   deleteProjectFile,
+  detectEntryFile,
   ensureProject,
+  isGitRepo,
   listFiles,
   projectDir,
   readProjectFile,
@@ -818,6 +821,126 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
       res.status(400).json({ error: String(err) });
+    }
+  });
+
+  // Import an existing local folder as a project. If the folder is a git repo
+  // we link directly (no copy); edits go back to the original folder and git
+  // handles rollback. Non-git folders have their design files copied into the
+  // standard project dir so the original is preserved.
+  app.post('/api/import/folder', async (req, res) => {
+    try {
+      const { folderPath, name, skillId, designSystemId } = req.body || {};
+      if (typeof folderPath !== 'string' || !folderPath.trim()) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'folderPath required');
+      }
+      const normalizedPath = path.normalize(folderPath.trim());
+      if (!path.isAbsolute(normalizedPath)) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'folderPath must be absolute');
+      }
+      let dirStat;
+      try {
+        dirStat = await fs.promises.stat(normalizedPath);
+      } catch {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'folder not found');
+      }
+      if (!dirStat.isDirectory()) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'path must be a directory');
+      }
+      // Prevent importing the data directory into itself.
+      if (
+        normalizedPath === RUNTIME_DATA_DIR ||
+        normalizedPath.startsWith(RUNTIME_DATA_DIR + path.sep)
+      ) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'cannot import the data directory');
+      }
+
+      const id = randomId();
+      const now = Date.now();
+      const projectName =
+        typeof name === 'string' && name.trim()
+          ? name.trim()
+          : path.basename(normalizedPath);
+      const git = isGitRepo(normalizedPath);
+      const entryFile = await detectEntryFile(normalizedPath);
+
+      let project;
+      let fileCount = 0;
+
+      if (git) {
+        project = insertProject(db, {
+          id,
+          name: projectName,
+          skillId: skillId ?? null,
+          designSystemId: designSystemId ?? null,
+          pendingPrompt: null,
+          metadata: {
+            kind: 'prototype',
+            folderPath: normalizedPath,
+            importedFrom: 'folder-git',
+            entryFile,
+          },
+          createdAt: now,
+          updatedAt: now,
+        });
+      } else {
+        const designFiles = await collectDesignFiles(normalizedPath);
+        fileCount = designFiles.length;
+        await ensureProject(PROJECTS_DIR, id);
+        for (const f of designFiles) {
+          const buf = await fs.promises.readFile(f.fullPath);
+          await writeProjectFile(PROJECTS_DIR, id, f.relPath, buf);
+        }
+        project = insertProject(db, {
+          id,
+          name: projectName,
+          skillId: skillId ?? null,
+          designSystemId: designSystemId ?? null,
+          pendingPrompt: null,
+          metadata: {
+            kind: 'prototype',
+            originalFolderPath: normalizedPath,
+            importedFrom: 'folder-copy',
+            entryFile,
+            fileCount,
+          },
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      const cid = randomId();
+      insertConversation(db, {
+        id: cid,
+        projectId: id,
+        title: `Imported from ${projectName}`,
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (entryFile) setTabs(db, id, [entryFile], entryFile);
+      res.json({ project, conversationId: cid, entryFile, isGit: git, fileCount });
+    } catch (err) {
+      sendApiError(res, 400, 'BAD_REQUEST', String(err));
+    }
+  });
+
+  // Re-copy design files from the original folder for copy-mode projects.
+  app.post('/api/projects/:id/reset-folder', async (req, res) => {
+    try {
+      const project = getProject(db, req.params.id);
+      if (!project) return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
+      const origPath = project.metadata?.originalFolderPath;
+      if (typeof origPath !== 'string' || project.metadata?.importedFrom !== 'folder-copy') {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'project was not imported from a folder');
+      }
+      const designFiles = await collectDesignFiles(origPath);
+      for (const f of designFiles) {
+        const buf = await fs.promises.readFile(f.fullPath);
+        await writeProjectFile(PROJECTS_DIR, project.id, f.relPath, buf, { overwrite: true });
+      }
+      res.json({ ok: true, filesReset: designFiles.length });
+    } catch (err) {
+      sendApiError(res, 400, 'BAD_REQUEST', String(err));
     }
   });
 
@@ -1746,7 +1869,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // project's own folder (see apps/daemon/src/projects.ts).
   app.get('/api/projects/:id/files', async (req, res) => {
     try {
-      const files = await listFiles(PROJECTS_DIR, req.params.id);
+      const project = getProject(db, req.params.id);
+      const files = await listFiles(PROJECTS_DIR, req.params.id, project?.metadata);
       /** @type {import('@open-design/contracts').ProjectFilesResponse} */
       const body = { files };
       res.json(body);
@@ -1770,7 +1894,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   app.get('/api/projects/:id/raw/*', async (req, res) => {
     try {
       const relPath = req.params[0];
-      const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath);
+      const project = getProject(db, req.params.id);
+      const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath, project?.metadata);
       // PreviewModal loads artifact HTML via srcdoc, giving the iframe Origin: "null".
       // data: URIs, file://, and some sandboxed iframes also send null — all are
       // local-only callers, so this is safe. Real cross-origin sites send a real
@@ -1787,7 +1912,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
   app.delete('/api/projects/:id/raw/*', async (req, res) => {
     try {
-      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params[0]);
+      const project = getProject(db, req.params.id);
+      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params[0], project?.metadata);
       /** @type {import('@open-design/contracts').DeleteProjectFileResponse} */
       const body = { ok: true };
       res.json(body);
@@ -1799,7 +1925,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
   app.get('/api/projects/:id/files/:name/preview', async (req, res) => {
     try {
-      const file = await readProjectFile(PROJECTS_DIR, req.params.id, req.params.name);
+      const project = getProject(db, req.params.id);
+      const file = await readProjectFile(PROJECTS_DIR, req.params.id, req.params.name, project?.metadata);
       const preview = await buildDocumentPreview(file);
       res.json(preview);
     } catch (err) {
@@ -1810,7 +1937,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
   app.get('/api/projects/:id/files/:name', async (req, res) => {
     try {
-      const file = await readProjectFile(PROJECTS_DIR, req.params.id, req.params.name);
+      const project = getProject(db, req.params.id);
+      const file = await readProjectFile(PROJECTS_DIR, req.params.id, req.params.name, project?.metadata);
       res.type(file.mime).send(file.buffer);
     } catch (err) {
       const status = err && err.code === 'ENOENT' ? 404 : 400;
@@ -1831,7 +1959,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     },
     async (req, res) => {
       try {
-        await ensureProject(PROJECTS_DIR, req.params.id);
+        const uploadProject = getProject(db, req.params.id);
+        await ensureProject(PROJECTS_DIR, req.params.id, uploadProject?.metadata);
         if (req.file) {
           const buf = await fs.promises.readFile(req.file.path);
           const desiredName = sanitizeName(req.body?.name || req.file.originalname);
@@ -1840,6 +1969,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
             req.params.id,
             desiredName,
             buf,
+            {},
+            uploadProject?.metadata,
           );
           fs.promises.unlink(req.file.path).catch(() => {});
           /** @type {import('@open-design/contracts').ProjectFileResponse} */
@@ -1862,7 +1993,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
             : Buffer.from(content, 'utf8');
         const meta = await writeProjectFile(PROJECTS_DIR, req.params.id, name, buf, {
           artifactManifest,
-        });
+        }, uploadProject?.metadata);
         /** @type {import('@open-design/contracts').ProjectFileResponse} */
         const body = { file: meta };
         res.json(body);
@@ -1874,7 +2005,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
   app.delete('/api/projects/:id/files/:name', async (req, res) => {
     try {
-      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params.name);
+      const delProject = getProject(db, req.params.id);
+      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params.name, delProject?.metadata);
       /** @type {import('@open-design/contracts').DeleteProjectFileResponse} */
       const body = { ok: true };
       res.json(body);
@@ -2233,12 +2365,21 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // doesn't exist yet). Without one we don't pass cwd to spawn — the
     // agent then runs in whatever inherited dir, which still lets API
     // mode work but loses file-tool addressability.
+    // For git-linked projects (metadata.folderPath), use that folder directly
+    // so the agent writes back to the user's original source tree.
     let cwd = null;
     let existingProjectFiles = [];
     if (typeof projectId === 'string' && projectId) {
       try {
-        cwd = await ensureProject(PROJECTS_DIR, projectId);
-        existingProjectFiles = await listFiles(PROJECTS_DIR, projectId);
+        const chatProject = getProject(db, projectId);
+        const chatMeta = chatProject?.metadata;
+        if (chatMeta?.folderPath) {
+          cwd = path.normalize(chatMeta.folderPath);
+          existingProjectFiles = await listFiles(PROJECTS_DIR, projectId, chatMeta);
+        } else {
+          cwd = await ensureProject(PROJECTS_DIR, projectId);
+          existingProjectFiles = await listFiles(PROJECTS_DIR, projectId);
+        }
       } catch {
         cwd = null;
       }

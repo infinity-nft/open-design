@@ -42,6 +42,7 @@ interface Props {
   loading?: boolean;
   onCreateProject: (input: CreateInput & { pendingPrompt?: string }) => void;
   onImportClaudeDesign: (file: File) => Promise<void> | void;
+  onImportFolder?: (folderPath: string) => Promise<void> | void;
   onOpenProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onChangeDefaultDesignSystem: (id: string) => void;
@@ -101,6 +102,7 @@ export function EntryView({
   loading = false,
   onCreateProject,
   onImportClaudeDesign,
+  onImportFolder,
   onOpenProject,
   onDeleteProject,
   onChangeDefaultDesignSystem,
@@ -262,6 +264,7 @@ export function EntryView({
           promptTemplates={promptTemplates}
           onCreate={handleCreate}
           onImportClaudeDesign={onImportClaudeDesign}
+          onImportFolder={onImportFolder}
           mediaProviders={config.mediaProviders}
           loading={loading}
         />

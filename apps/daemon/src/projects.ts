@@ -9,6 +9,7 @@
 
 import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import {
   inferLegacyManifest,
   parsePersistedManifest,
@@ -22,22 +23,133 @@ export function projectDir(projectsRoot, projectId) {
   return path.join(projectsRoot, projectId);
 }
 
-export async function ensureProject(projectsRoot, projectId) {
-  const dir = projectDir(projectsRoot, projectId);
-  await mkdir(dir, { recursive: true });
+// Returns the folder a project's files live in. For git-linked projects
+// (metadata.folderPath set), this is the user's own folder. Otherwise falls
+// back to the standard computed path under projectsRoot.
+export function resolveProjectDir(projectsRoot, projectId, metadata?) {
+  if (typeof metadata?.folderPath === 'string') {
+    const p = path.normalize(metadata.folderPath);
+    if (path.isAbsolute(p)) return p;
+  }
+  if (!isSafeId(projectId)) throw new Error('invalid project id');
+  return path.join(projectsRoot, projectId);
+}
+
+export async function ensureProject(projectsRoot, projectId, metadata?) {
+  const dir = resolveProjectDir(projectsRoot, projectId, metadata);
+  // Git-linked folders already exist; skip mkdir to avoid side-effects.
+  if (typeof metadata?.folderPath !== 'string') {
+    await mkdir(dir, { recursive: true });
+  }
   return dir;
 }
 
-export async function listFiles(projectsRoot, projectId) {
-  const dir = projectDir(projectsRoot, projectId);
+export async function listFiles(projectsRoot, projectId, metadata?) {
+  const dir = resolveProjectDir(projectsRoot, projectId, metadata);
   const out = [];
-  await collectFiles(dir, '', out);
+  // Skip build/install dirs for linked folders so node_modules doesn't stall
+  // the walk on large repos.
+  const skipDirs = metadata?.folderPath ? SKIP_DIRS : undefined;
+  await collectFiles(dir, '', out, skipDirs);
   // Newest first — matches the visual order users expect after generating.
   out.sort((a, b) => b.mtime - a.mtime);
   return out;
 }
 
-async function collectFiles(dir, relDir, out) {
+// ---- Design-file collector for folder import --------------------------------
+
+const DESIGN_EXTS = new Set([
+  '.html', '.htm',
+  '.css', '.scss', '.sass', '.less',
+  '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx',
+  '.svg',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico', '.avif',
+  '.woff', '.woff2', '.ttf', '.otf', '.eot',
+  '.md',
+]);
+
+// .json only when small (config files, token maps, etc.)
+const JSON_MAX_BYTES = 100 * 1024;
+
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.turbo',
+  '.cache', '.output', 'out', 'coverage', '__pycache__', '.venv',
+  'vendor', 'target', '.od', '.tmp',
+]);
+
+const FOLDER_MAX_FILES = 500;
+const FOLDER_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
+const FOLDER_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+export interface DesignFile {
+  relPath: string;
+  fullPath: string;
+  size: number;
+}
+
+export async function collectDesignFiles(rootDir: string): Promise<DesignFile[]> {
+  const out: DesignFile[] = [];
+  let totalBytes = 0;
+
+  async function walk(dir: string, relDir: string) {
+    if (out.length >= FOLDER_MAX_FILES) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= FOLDER_MAX_FILES) return;
+      const name = e.name;
+      if (name.startsWith('.')) continue;
+      const full = path.join(dir, name);
+      const rel = relDir ? `${relDir}/${name}` : name;
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(name)) await walk(full, rel);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      const ext = path.extname(name).toLowerCase();
+      const isJson = ext === '.json';
+      if (!DESIGN_EXTS.has(ext) && !isJson) continue;
+      let size: number;
+      try {
+        const st = await stat(full);
+        size = st.size;
+      } catch {
+        continue;
+      }
+      if (size > FOLDER_MAX_FILE_BYTES) continue;
+      if (isJson && size > JSON_MAX_BYTES) continue;
+      if (totalBytes + size > FOLDER_MAX_TOTAL_BYTES) continue;
+      totalBytes += size;
+      out.push({ relPath: rel, fullPath: full, size });
+    }
+  }
+
+  await walk(rootDir, '');
+  return out;
+}
+
+export async function detectEntryFile(dir: string): Promise<string | null> {
+  try {
+    await stat(path.join(dir, 'index.html'));
+    return 'index.html';
+  } catch { /* not found */ }
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const htmlFile = entries.find((e) => e.isFile() && /\.html?$/i.test(e.name));
+    if (htmlFile) return htmlFile.name;
+  } catch { /* ignore */ }
+  return null;
+}
+
+export function isGitRepo(dir: string): boolean {
+  return existsSync(path.join(dir, '.git'));
+}
+
+async function collectFiles(dir, relDir, out, skipDirs?: Set<string>) {
   let entries = [];
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -50,7 +162,8 @@ async function collectFiles(dir, relDir, out) {
     const rel = relDir ? `${relDir}/${e.name}` : e.name;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
-      await collectFiles(full, rel, out);
+      if (skipDirs && skipDirs.has(e.name)) continue;
+      await collectFiles(full, rel, out, skipDirs);
       continue;
     }
     if (!e.isFile()) continue;
@@ -71,8 +184,8 @@ async function collectFiles(dir, relDir, out) {
   }
 }
 
-export async function readProjectFile(projectsRoot, projectId, name) {
-  const dir = projectDir(projectsRoot, projectId);
+export async function readProjectFile(projectsRoot, projectId, name, metadata?) {
+  const dir = resolveProjectDir(projectsRoot, projectId, metadata);
   const file = resolveSafe(dir, name);
   const buf = await readFile(file);
   const st = await stat(file);
@@ -97,8 +210,9 @@ export async function writeProjectFile(
   name,
   body,
   { overwrite = true, artifactManifest = null } = {},
+  metadata?,
 ) {
-  const dir = await ensureProject(projectsRoot, projectId);
+  const dir = await ensureProject(projectsRoot, projectId, metadata);
   const safeName = sanitizePath(name);
   const target = resolveSafe(dir, safeName);
   if (!overwrite) {
@@ -156,8 +270,8 @@ function parseManifest(raw) {
   return parsePersistedManifest(raw, '');
 }
 
-export async function deleteProjectFile(projectsRoot, projectId, name) {
-  const dir = projectDir(projectsRoot, projectId);
+export async function deleteProjectFile(projectsRoot, projectId, name, metadata?) {
+  const dir = resolveProjectDir(projectsRoot, projectId, metadata);
   const file = resolveSafe(dir, name);
   await unlink(file);
 }

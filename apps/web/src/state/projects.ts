@@ -57,6 +57,37 @@ export async function createProject(input: {
   }
 }
 
+export async function importFolderProject(input: {
+  folderPath: string;
+  name?: string;
+  skillId?: string | null;
+  designSystemId?: string | null;
+}): Promise<{
+  project: Project;
+  conversationId: string;
+  entryFile: string | null;
+  isGit: boolean;
+  fileCount: number;
+} | null> {
+  try {
+    const resp = await fetch('/api/import/folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!resp.ok) return null;
+    return (await resp.json()) as {
+      project: Project;
+      conversationId: string;
+      entryFile: string | null;
+      isGit: boolean;
+      fileCount: number;
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function importClaudeDesignZip(
   file: File,
 ): Promise<{ project: Project; conversationId: string; entryFile: string } | null> {
