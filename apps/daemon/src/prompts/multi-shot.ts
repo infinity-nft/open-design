@@ -110,9 +110,9 @@ must still satisfy every \`must_use\` from the brief and pass
   "axis": "layout | type | color | density",
   "ranking": ["A", "B", "C"],
   "rationale": [
-    { "variant": "A", "verdict": "win | runner-up | last", "why": "≤140 chars — what it gets right and what it sacrifices" },
-    { "variant": "B", "verdict": "win | runner-up | last", "why": "≤140 chars — what it gets right and what it sacrifices" },
-    { "variant": "C", "verdict": "win | runner-up | last", "why": "≤140 chars — what it gets right and what it sacrifices" }
+    { "variant": "A", "verdict": "win",       "why": "≤140 chars — WHY THIS WON: the specific thing it nails that the others don't" },
+    { "variant": "B", "verdict": "runner-up", "why": "≤140 chars — what it does well and the one specific thing that costs it first place" },
+    { "variant": "C", "verdict": "last",      "why": "≤140 chars — its core strength and the concrete reason it ranked last" }
   ],
   "confidence": "high | medium | low"
 }
@@ -146,6 +146,12 @@ must still satisfy every \`must_use\` from the brief and pass
    index, a token name, or an anti-slop rule id. "Variant A wins:
    serif type pairs better with editorial mood (success_criteria #2)"
    beats "Variant A feels more refined".
+
+   The winner's \`why\` is shown as a headline to the user. Write it
+   as a complete, self-contained design statement — not a comparison
+   ("unlike B"), not a fragment ("good hierarchy"). Good example:
+   "Asymmetric grid anchors the hero at 70vw and leaves breathing room
+   for the metrics row (success_criteria #1 + #3)."
 
 5. **One pass.** Do not re-judge after declaring a winner. Do not
    regenerate variants in this turn after \`<od-judge>\` is emitted.

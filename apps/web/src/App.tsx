@@ -455,6 +455,7 @@ export function App() {
           daemonLive={daemonLive}
           appVersionInfo={appVersionInfo}
           welcome={settingsWelcome}
+          projectId={activeProject?.id ?? null}
           defaultSection={settingsSection}
           onSave={handleConfigSave}
           onClose={() => {

@@ -10,6 +10,8 @@ import { AssistantMessage } from './AssistantMessage';
 import { ChatComposer, type ChatComposerHandle } from './ChatComposer';
 import { DaemonHealthBadge } from './DaemonHealthBadge';
 import { Icon } from './Icon';
+import { ReferencesPanel } from './ReferencesPanel';
+import type { DesignSystemSummary } from '../types';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 
@@ -97,6 +99,8 @@ interface Props {
   // In API mode (Topology C — direct LLM call from browser) there is
   // no daemon to be down, so the badge stays hidden.
   execMode?: AppConfig['mode'];
+  // Passed through to ReferencesPanel so it can show the DS picker.
+  designSystems?: DesignSystemSummary[];
 }
 
 type Tab = 'chat' | 'comments';
@@ -133,15 +137,31 @@ export function ChatPane({
   onTogglePet,
   onOpenPetSettings,
   execMode,
+  designSystems = [],
 }: Props) {
   const t = useT();
   const logRef = useRef<HTMLDivElement | null>(null);
   const historyWrapRef = useRef<HTMLDivElement | null>(null);
+  const refsWrapRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<ChatComposerHandle | null>(null);
   const didInitialScrollRef = useRef(false);
   const [tab, setTab] = useState<Tab>('chat');
   const [showConvList, setShowConvList] = useState(false);
+  const [showRefs, setShowRefs] = useState(false);
   const [scrolledFromBottom, setScrolledFromBottom] = useState(false);
+
+  // Close refs panel on outside click (but not when clicking the chip itself,
+  // which is also inside refsWrapRef — the toggle handles that case).
+  useEffect(() => {
+    if (!showRefs) return;
+    function onDown(e: MouseEvent) {
+      if (refsWrapRef.current && !refsWrapRef.current.contains(e.target as Node)) {
+        setShowRefs(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [showRefs]);
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
   const hasActiveRunMessage = messages.some(
     (m) => m.role === 'assistant' && isActiveRunStatus(m.runStatus),
@@ -254,6 +274,27 @@ export function ChatPane({
           </button>
         </div>
         <div className="chat-header-actions">
+          {projectId ? (
+            <div className="refs-chip-wrap" ref={refsWrapRef}>
+              <button
+                type="button"
+                className={`refs-chip${showRefs ? ' active' : ''}`}
+                title="References — taste signals for the agent"
+                aria-haspopup="dialog"
+                aria-expanded={showRefs}
+                onClick={() => setShowRefs((v) => !v)}
+              >
+                ✶ Refs
+              </button>
+              {showRefs ? (
+                <ReferencesPanel
+                  projectId={projectId}
+                  designSystems={designSystems}
+                  onClose={() => setShowRefs(false)}
+                />
+              ) : null}
+            </div>
+          ) : null}
           <div
             className={`chat-history-wrap${showConvList ? ' open' : ''}`}
             ref={historyWrapRef}

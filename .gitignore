@@ -4,6 +4,7 @@ out/
 .next/
 .next-*/
 .tmp/
+.turbo/
 .DS_Store
 *.log
 .vite

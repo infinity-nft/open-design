@@ -32,6 +32,10 @@ export async function listSkills(skillsRoot) {
       const hasAttachments = await dirHasAttachments(dir);
       const mode = data.od?.mode || inferMode(body, data.description);
       const surface = normalizeSurface(data.od?.surface, mode);
+      const maxGoldens = typeof data.od?.goldens?.max === "number"
+        ? Math.max(0, Math.min(3, data.od.goldens.max))
+        : 1;
+      const goldens = await loadSkillGoldens(dir, maxGoldens);
       out.push({
         id: data.name || entry.name,
         name: data.name || entry.name,
@@ -62,6 +66,7 @@ export async function listSkills(skillsRoot) {
         animations: normalizeBoolHint(data.od?.animations),
         examplePrompt: derivePrompt(data),
         body: hasAttachments ? withSkillRootPreamble(body, dir) : body,
+        goldens,
         dir,
       });
     } catch {
@@ -69,6 +74,64 @@ export async function listSkills(skillsRoot) {
     }
   }
   return out;
+}
+
+// Golden few-shot examples. Each golden lives in goldens/<slug>/ with two
+// files: prompt.md (the user brief) and artifact.html (the reference output).
+// Goldens are injected into the system prompt when OD_SKILL_GOLDENS=1 to show
+// the agent what "good" looks like for this skill without the agent having to
+// infer it from the SKILL.md workflow alone.
+const GOLDEN_ARTIFACT_MAX_CHARS = 8_000;
+
+export interface SkillGolden {
+  slug: string;
+  prompt: string;
+  artifact: string;
+}
+
+async function loadSkillGoldens(skillDir: string, max: number): Promise<SkillGolden[]> {
+  if (max <= 0) return [];
+  const goldensDir = path.join(skillDir, "goldens");
+  let slots: string[] = [];
+  try {
+    const entries = await readdir(goldensDir, { withFileTypes: true });
+    slots = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort()
+      .slice(0, max);
+  } catch {
+    return [];
+  }
+  const out: SkillGolden[] = [];
+  for (const slug of slots) {
+    const dir = path.join(goldensDir, slug);
+    try {
+      const promptPath = path.join(dir, "prompt.md");
+      const artifactPath = path.join(dir, "artifact.html");
+      const [promptRaw, artifactRaw] = await Promise.all([
+        readFile(promptPath, "utf8"),
+        readFile(artifactPath, "utf8"),
+      ]);
+      const prompt = promptRaw.trim().slice(0, 2_000);
+      // Truncate artifact at a clean tag boundary so the injected HTML stays
+      // parseable even when cut short.
+      const artifact = truncateHtmlClean(artifactRaw.trim(), GOLDEN_ARTIFACT_MAX_CHARS);
+      if (prompt && artifact) out.push({ slug, prompt, artifact });
+    } catch {
+      // Missing file in one golden → skip that golden, keep others.
+    }
+  }
+  return out;
+}
+
+function truncateHtmlClean(html: string, maxChars: number): string {
+  if (html.length <= maxChars) return html;
+  const cut = html.slice(0, maxChars);
+  // Walk back to the last complete tag close or newline.
+  const lastClose = Math.max(cut.lastIndexOf(">"), cut.lastIndexOf("\n"));
+  const safe = lastClose > maxChars * 0.8 ? cut.slice(0, lastClose + 1) : cut;
+  return `${safe}\n<!-- [truncated for context length] -->`;
 }
 
 // Skills that ship side files (e.g. `assets/template.html`, `references/*.md`)

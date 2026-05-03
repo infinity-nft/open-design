@@ -19,6 +19,7 @@ import type { AgentInfo, AppConfig, AppTheme, AppVersionInfo, ExecMode } from '.
 import { MEDIA_PROVIDERS } from '../media/models';
 import type { MediaProvider } from '../media/models';
 import { PetSettings } from './pet/PetSettings';
+import { TasteMemoryTab } from './TasteMemoryTab';
 
 export type SettingsSection =
   | 'execution'
@@ -26,6 +27,7 @@ export type SettingsSection =
   | 'language'
   | 'appearance'
   | 'pet'
+  | 'taste'
   | 'about';
 
 interface Props {
@@ -34,6 +36,7 @@ interface Props {
   daemonLive: boolean;
   appVersionInfo: AppVersionInfo | null;
   welcome?: boolean;
+  projectId?: string | null;
   // Optional deep-link target so callers (e.g. the entry-view "adopt a
   // pet" pill) can pop the dialog open straight on a specific section.
   defaultSection?: SettingsSection;
@@ -86,6 +89,7 @@ export function SettingsDialog({
   daemonLive,
   appVersionInfo,
   welcome,
+  projectId,
   defaultSection,
   onSave,
   onClose,
@@ -304,6 +308,17 @@ export function SettingsDialog({
               <span>
                 <strong>{t('pet.navTitle')}</strong>
                 <small>{t('pet.navHint')}</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`settings-nav-item${activeSection === 'taste' ? ' active' : ''}`}
+              onClick={() => setActiveSection('taste')}
+            >
+              <Icon name="sparkles" size={18} />
+              <span>
+                <strong>Taste memory</strong>
+                <small>Personalisation signals</small>
               </span>
             </button>
             <button
@@ -728,6 +743,10 @@ export function SettingsDialog({
 
           {activeSection === 'pet' ? (
             <PetSettings cfg={cfg} setCfg={setCfg} />
+          ) : null}
+
+          {activeSection === 'taste' ? (
+            <TasteMemoryTab projectId={projectId} />
           ) : null}
 
           {activeSection === 'about' ? (

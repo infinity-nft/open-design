@@ -565,36 +565,53 @@ function JudgeCard({
 }) {
   const { winner, axis, ranking, rationale, confidence } = payload;
   const verdictByVariant = new Map(rationale.map((r) => [r.variant, r] as const));
+  const winnerWhy = winner ? (verdictByVariant.get(winner)?.why ?? null) : null;
+  const [expanded, setExpanded] = useState(false);
   return (
     <div className="judge-card" data-confidence={confidence}>
       <div className="judge-card-header">
-        <span className="judge-chip">Multi-shot judge</span>
-        <span className="judge-summary">
-          Winner: <strong>{winner || '—'}</strong>
-          {axis ? <span className="judge-axis"> · varies on {axis}</span> : null}
-          <span className={`judge-confidence judge-confidence--${confidence}`}>
-            {confidence}
+        <button
+          type="button"
+          className="judge-card-toggle"
+          onClick={() => setExpanded((x) => !x)}
+          aria-expanded={expanded}
+        >
+          <span className="judge-chip">Multi-shot judge</span>
+          <span className="judge-summary">
+            Winner: <strong>{winner || '—'}</strong>
+            {axis ? <span className="judge-axis"> · {axis}</span> : null}
+            <span className={`judge-confidence judge-confidence--${confidence}`}>
+              {confidence}
+            </span>
           </span>
-        </span>
+          <span className="lint-toggle-icon">{expanded ? '▾' : '▸'}</span>
+        </button>
       </div>
-      <div className="judge-card-body">
-        <ol className="judge-ranking">
-          {ranking.map((variant, i) => {
-            const row = verdictByVariant.get(variant);
-            const isWinner = variant === winner;
-            return (
-              <li
-                key={variant}
-                className={`judge-rank judge-rank--${row?.verdict ?? 'na'}${isWinner ? ' is-winner' : ''}`}
-              >
-                <span className="judge-rank-position">#{i + 1}</span>
-                <span className="judge-rank-variant">{variant}</span>
-                <span className="judge-rank-why">{row?.why || '(no rationale)'}</span>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
+      {winnerWhy ? (
+        <div className="judge-winner-rationale">
+          {winnerWhy}
+        </div>
+      ) : null}
+      {expanded ? (
+        <div className="judge-card-body">
+          <ol className="judge-ranking">
+            {ranking.map((variant, i) => {
+              const row = verdictByVariant.get(variant);
+              const isWinner = variant === winner;
+              return (
+                <li
+                  key={variant}
+                  className={`judge-rank judge-rank--${row?.verdict ?? 'na'}${isWinner ? ' is-winner' : ''}`}
+                >
+                  <span className="judge-rank-position">#{i + 1}</span>
+                  <span className="judge-rank-variant">{variant}</span>
+                  <span className="judge-rank-why">{row?.why || '(no rationale)'}</span>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      ) : null}
     </div>
   );
 }

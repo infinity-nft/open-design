@@ -3,6 +3,8 @@ import { dirname, isAbsolute, resolve } from "node:path";
 
 import { BrowserWindow } from "electron";
 
+import { WINDOW_WEB_PREFERENCES } from "./window-options.js";
+
 const PENDING_POLL_MS = 120;
 const RUNNING_POLL_MS = 2000;
 const MAX_CONSOLE_ENTRIES = 200;
@@ -211,11 +213,7 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     show: true,
     title: "Open Design",
     ...MAC_WINDOW_CHROME,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    webPreferences: WINDOW_WEB_PREFERENCES,
     width: 1280,
   });
   installWindowChromeCssHook(window);

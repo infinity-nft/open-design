@@ -193,6 +193,89 @@ export async function removeProjectReference(
   }
 }
 
+// --- Taste memory inspector (T2.2) -----------------------------------
+
+export interface TasteAggregate {
+  subject: string;
+  score: number;
+  count: number;
+  positive: number;
+  negative: number;
+  confidence: 'high' | 'medium' | 'low';
+  lastSignalAt: number;
+}
+
+export interface TasteSignal {
+  id: string;
+  scope: string;
+  projectId: string | null;
+  sessionId: string | null;
+  subject: string;
+  polarity: number;
+  source: string;
+  createdAt: number;
+}
+
+export async function fetchTasteAggregates(
+  scope: 'user' | 'project' | 'session',
+  id?: string | null,
+): Promise<TasteAggregate[]> {
+  try {
+    const params = new URLSearchParams({ scope });
+    if (id) params.set(scope === 'project' ? 'projectId' : 'sessionId', id);
+    const resp = await fetch(`/api/taste/aggregate?${params}`);
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as { aggregates?: TasteAggregate[] };
+    return json.aggregates ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchTasteSignals(
+  scope: 'user' | 'project' | 'session',
+  id?: string | null,
+  limit = 200,
+): Promise<TasteSignal[]> {
+  try {
+    const params = new URLSearchParams({ scope, limit: String(limit) });
+    if (id) params.set('id', id);
+    const resp = await fetch(`/api/taste/signals?${params}`);
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as { signals?: TasteSignal[] };
+    return json.signals ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteTasteSignal(id: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/taste/signals/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function clearTasteScope(
+  scope: 'user' | 'project' | 'session',
+  id?: string | null,
+): Promise<boolean> {
+  try {
+    const params = new URLSearchParams();
+    if (id) params.set('id', id);
+    const qs = params.toString();
+    const resp = await fetch(
+      `/api/taste/scope/${encodeURIComponent(scope)}${qs ? `?${qs}` : ''}`,
+      { method: 'DELETE' },
+    );
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 // --- Explicit user feedback (T2.3) -----------------------------------
 
 export interface FeedbackInput {

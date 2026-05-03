@@ -1339,6 +1339,7 @@ export function ProjectView({
             void handleSend(text, [], []);
           }}
           execMode={config.mode}
+          designSystems={designSystems}
           onContinueRemainingTasks={handleContinueRemainingTasks}
           onNewConversation={handleNewConversation}
           conversations={conversations}
