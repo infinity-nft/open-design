@@ -28,6 +28,7 @@ export type SrcdocOptions = {
   commentBridge?: boolean;
   inspectBridge?: boolean;
   editBridge?: boolean;
+  scrollBridge?: boolean;
 };
 
 export function buildSrcdoc(
@@ -50,21 +51,15 @@ export function buildSrcdoc(
   const withBase = options.baseHref ? injectBaseHref(withSourcePaths, options.baseHref) : withSourcePaths;
   const withShim = injectSandboxShim(withBase);
   const withDeck = options.deck ? injectDeckBridge(withShim, options.initialSlideIndex) : withShim;
-  // Comment + Inspect share an element-selection bridge: both pick a
-  // [data-od-id] / [data-screen-label] node and route the host's reply
-  // to either the comment popover (annotate) or the inspect panel
-  // (live-style overrides). Inject once when either mode is on. Pass the
-  // requested modes through so the bridge boots with picking already
-  // active — without that initial seed there is a window after each
-  // srcdoc rebuild where the host's `od:*-mode` postMessage races the
-  // bridge's own listener install and the iframe ignores clicks.
+  // Comment + Inspect share an element-selection bridge
   const withSelection = options.commentBridge || options.inspectBridge
     ? injectSelectionBridge(withDeck, {
         initialCommentMode: !!options.commentBridge,
         initialInspectMode: !!options.inspectBridge,
       })
     : withDeck;
-  return options.editBridge ? injectManualEditBridge(withSelection) : withSelection;
+  const withManualEdit = options.editBridge ? injectManualEditBridge(withSelection) : withSelection;
+  return options.scrollBridge ? injectScrollBridge(withManualEdit) : withManualEdit;
 }
 
 function annotateManualEditSourcePaths(doc: string): string {
@@ -658,6 +653,17 @@ html[data-od-inspect-mode] body * { cursor: crosshair !important; }
 html[data-od-comment-mode][data-od-comment-mode-kind="pod"] body * { cursor: cell !important; }
 </style>`;
   return injectBeforeBodyEnd(injectBeforeHeadEnd(doc, style), script);
+}
+
+function injectScrollBridge(doc: string): string {
+  const script = `<script data-od-scroll-bridge>(function(){
+  window.addEventListener('message', function(ev){
+    if (!ev.data || ev.data.type !== 'od:scroll') return;
+    window.scrollBy(ev.data.x || 0, ev.data.y || 0);
+  });
+})();</script>`;
+  if (/<\/body>/i.test(doc)) return doc.replace(/<\/body>/i, script + '</body>');
+  return doc + script;
 }
 
 // The deck bridge supports three deck conventions found across our skills

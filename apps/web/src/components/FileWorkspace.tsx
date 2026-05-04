@@ -51,6 +51,7 @@ interface Props {
   onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
   focusMode?: boolean;
   onFocusModeChange?: (next: boolean) => void;
+  onSendToChat?: (text: string, imageFile?: File) => Promise<void> | void;
 }
 
 interface SketchState {
@@ -82,6 +83,7 @@ export function FileWorkspace({
   onSendBoardCommentAttachments,
   focusMode = false,
   onFocusModeChange,
+  onSendToChat,
 }: Props) {
   const t = useT();
   // Persisted tabs come from the parent. Active tab can transiently point
@@ -692,6 +694,7 @@ export function FileWorkspace({
             onRemovePreviewComment={onRemovePreviewComment}
             onSendBoardCommentAttachments={onSendBoardCommentAttachments}
             onFileSaved={onRefreshFiles}
+            onSendToChat={onSendToChat}
           />
         ) : (
           <div className="viewer-empty">

@@ -27,6 +27,7 @@ import {
   fetchSkill,
   patchPreviewCommentStatus,
   upsertPreviewComment,
+  uploadProjectFiles,
   writeProjectTextFile,
 } from '../providers/registry';
 import { useProjectFileEvents, type ProjectEvent } from '../providers/project-events';
@@ -1946,6 +1947,20 @@ export function ProjectView({
             onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
             focusMode={workspaceFocused}
             onFocusModeChange={setWorkspaceFocused}
+            onSendToChat={async (text, imageFile) => {
+              const id = await handleEnsureProject();
+              if (!id) return;
+              let attachments: ChatAttachment[] = [];
+              if (imageFile) {
+                const result = await uploadProjectFiles(id, [imageFile]);
+                const uploaded = result.uploaded[0];
+                if (uploaded) {
+                  attachments = [{ path: uploaded.path, name: uploaded.name, kind: 'image', size: uploaded.size }];
+                  void refreshProjectFiles();
+                }
+              }
+              void handleSend(text, attachments);
+            }}
           />
         )}
       </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useT } from '../i18n';
 
 export type Tool = 'select' | 'pen' | 'text' | 'rect' | 'arrow' | 'eraser';
@@ -54,6 +54,11 @@ interface Props {
   saving?: boolean;
   dirty?: boolean;
   fileName: string;
+  // When true, renders as a transparent overlay on top of existing content
+  // (no grid background, absolute-positioned canvas).
+  overlay?: boolean;
+  // Expose the canvas element to the parent (for PNG capture in overlay mode).
+  canvasRef?: React.MutableRefObject<HTMLCanvasElement | null>;
 }
 
 export function SketchEditor({
@@ -64,9 +69,12 @@ export function SketchEditor({
   saving = false,
   dirty = false,
   fileName,
+  overlay = false,
+  canvasRef: externalCanvasRef,
 }: Props) {
   const t = useT();
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const internalCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = externalCanvasRef ?? internalCanvasRef;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState('#1c1b1a');
@@ -111,10 +119,10 @@ export function SketchEditor({
     const w = cvs.clientWidth;
     const h = cvs.clientHeight;
     ctx.clearRect(0, 0, w, h);
-    drawGrid(ctx, w, h);
+    if (!overlay) drawGrid(ctx, w, h);
     const all = drawingRef.current ? [...items, drawingRef.current] : items;
     for (const it of all) drawItem(ctx, it);
-  }, [items]);
+  }, [items, overlay]);
 
   useEffect(() => {
     redraw();
@@ -217,7 +225,7 @@ export function SketchEditor({
   }
 
   return (
-    <div className="sketch-editor">
+    <div className={`sketch-editor${overlay ? ' sketch-overlay' : ''}`}>
       <div className="sketch-toolbar">
         <ToolBtn cur={tool} v="select" onClick={setTool} title={t('sketch.toolSelect')} label="↖" />
         <ToolBtn cur={tool} v="pen" onClick={setTool} title={t('sketch.toolPen')} label="✎" />

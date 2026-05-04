@@ -8967,6 +8967,140 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
 .sketch-canvas-wrap { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .sketch-canvas-wrap canvas { display: block; cursor: crosshair; }
 
+/* Overlay draw mode — floats above the preview iframe */
+.sketch-editor.sketch-overlay {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  pointer-events: none;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+}
+.sketch-editor.sketch-overlay .sketch-toolbar {
+  pointer-events: all;
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+  backdrop-filter: blur(8px);
+  flex-shrink: 0;
+}
+.sketch-editor.sketch-overlay .sketch-canvas-wrap {
+  background: transparent;
+  pointer-events: all;
+  flex: 1;
+  min-height: 0;
+}
+/* Hide the save/close/name controls — compose bar handles that */
+.sketch-editor.sketch-overlay .sketch-name,
+.sketch-editor.sketch-overlay .sketch-spacer,
+.sketch-editor.sketch-overlay button.primary,
+.sketch-editor.sketch-overlay button.ghost {
+  display: none;
+}
+/* viewer-body needs overflow:hidden when draw mode is active */
+.viewer-body:has(.draw-mode-wrap) {
+  overflow: hidden;
+}
+
+/* Draw mode outer wrapper — fills viewer-body (which is position:relative, overflow:auto) */
+.draw-mode-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Preview area: fills all space above the compose bar */
+.draw-preview-layer {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Compose bar: fixed height at the bottom */
+.draw-compose-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.draw-compose-input {
+  width: 100%;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  box-sizing: border-box;
+  min-height: 72px;
+}
+.draw-compose-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
+.draw-compose-input::placeholder { color: var(--text-muted); }
+.draw-compose-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.draw-compose-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+/* Edit split-view mode */
+.viewer-edit-split {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr auto;
+  min-height: 0;
+  gap: 0;
+}
+.viewer-edit-source {
+  grid-row: 1;
+  grid-column: 1;
+  resize: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  padding: 12px 14px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--bg-subtle);
+  color: var(--text);
+  outline: none;
+  overflow: auto;
+}
+.viewer-edit-preview {
+  grid-row: 1;
+  grid-column: 2;
+  overflow: hidden;
+  position: relative;
+}
+.viewer-edit-preview iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+.viewer-edit-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
 /* ===========================================================
    Streaming chat: assistant message header, prose, thinking,
    tool cards, status pills, grouped action card.
