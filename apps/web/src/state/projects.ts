@@ -192,6 +192,49 @@ export async function deleteProject(id: string): Promise<boolean> {
   }
 }
 
+// ---------- dev server ----------
+
+export async function startDevServer(
+  projectId: string,
+): Promise<{ url: string; port: number } | null> {
+  try {
+    const resp = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/dev-server/start`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+    );
+    if (!resp.ok) return null;
+    return (await resp.json()) as { url: string; port: number };
+  } catch {
+    return null;
+  }
+}
+
+export async function stopDevServer(projectId: string): Promise<boolean> {
+  try {
+    const resp = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/dev-server/stop`,
+      { method: 'DELETE' },
+    );
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function getDevServerStatus(
+  projectId: string,
+): Promise<{ running: boolean; url: string | null }> {
+  try {
+    const resp = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/dev-server`,
+    );
+    if (!resp.ok) return { running: false, url: null };
+    return (await resp.json()) as { running: boolean; url: string | null };
+  } catch {
+    return { running: false, url: null };
+  }
+}
+
 // ---------- conversations ----------
 
 export async function listConversations(

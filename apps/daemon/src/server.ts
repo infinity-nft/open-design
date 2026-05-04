@@ -326,6 +326,63 @@ const ARTIFACTS_DIR = path.join(RUNTIME_DATA_DIR, 'artifacts');
 const PROJECTS_DIR = path.join(RUNTIME_DATA_DIR, 'projects');
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 
+// In-memory registry of running dev servers (keyed by projectId).
+// Killed on daemon shutdown and on explicit stop requests.
+const devServers = new Map<string, { child: import('node:child_process').ChildProcess; url: string; port: number }>();
+
+function killAllDevServers() {
+  for (const { child } of devServers.values()) { try { child.kill(); } catch { /* ignore */ } }
+  devServers.clear();
+}
+process.on('exit', killAllDevServers);
+process.on('SIGINT', () => { killAllDevServers(); process.exit(0); });
+process.on('SIGTERM', () => { killAllDevServers(); process.exit(0); });
+
+// Detect a dev server script in a project folder.
+// Checks root package.json and common frontend subdirs.
+async function detectDevServer(rootDir: string): Promise<{ script: string; cwd: string; port: number } | null> {
+  const candidates = ['.', 'frontend', 'client', 'web', 'app', 'packages/web'];
+  const FRAMEWORK_DEFAULTS: Record<string, number> = { 'next': 3000, 'vite': 5173, 'react-scripts': 3000, 'astro': 4321 };
+  for (const sub of candidates) {
+    const pkgPath = path.join(rootDir, sub, 'package.json');
+    try {
+      const raw = await fs.promises.readFile(pkgPath, 'utf8');
+      const pkg = JSON.parse(raw);
+      const devScript: string | undefined = pkg?.scripts?.dev ?? pkg?.scripts?.start;
+      if (!devScript) continue;
+      // Extract port from --port N or -p N flag in the script
+      const portMatch = devScript.match(/(?:--port|-p)\s+(\d+)/);
+      let port = portMatch ? parseInt(portMatch[1], 10) : 0;
+      if (!port) {
+        for (const [fw, defaultPort] of Object.entries(FRAMEWORK_DEFAULTS)) {
+          if (devScript.includes(fw)) { port = defaultPort; break; }
+        }
+      }
+      if (!port) continue;
+      const scriptKey = pkg?.scripts?.dev ? 'dev' : 'start';
+      // Detect package manager
+      const hasYarnLock = fs.existsSync(path.join(rootDir, sub, 'yarn.lock'));
+      const hasPnpmLock = fs.existsSync(path.join(rootDir, sub, 'pnpm-lock.yaml'));
+      const pm = hasPnpmLock ? 'pnpm' : hasYarnLock ? 'yarn' : 'npm';
+      return { script: `${pm} run ${scriptKey}`, cwd: sub === '.' ? '' : sub, port };
+    } catch { continue; }
+  }
+  return null;
+}
+
+// Poll until the dev server responds on its port or timeout.
+async function waitForDevServer(port: number, timeoutMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch(`http://localhost:${port}`, { signal: AbortSignal.timeout(800) });
+      if (resp.ok || resp.status < 500) return true;
+    } catch { /* not ready yet */ }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
+
 export const SSE_KEEPALIVE_INTERVAL_MS = 25_000;
 
 export function normalizeProjectDisplayStatus(status) {
@@ -863,6 +920,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
           : path.basename(normalizedPath);
       const git = isGitRepo(normalizedPath);
       const entryFile = await detectEntryFile(normalizedPath);
+      const devServerConfig = await detectDevServer(normalizedPath);
 
       let project;
       let fileCount = 0;
@@ -879,6 +937,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
             folderPath: normalizedPath,
             importedFrom: 'folder-git',
             entryFile,
+            ...(devServerConfig ? { devServer: devServerConfig } : {}),
           },
           createdAt: now,
           updatedAt: now,
@@ -903,6 +962,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
             importedFrom: 'folder-copy',
             entryFile,
             fileCount,
+            ...(devServerConfig ? { devServer: devServerConfig } : {}),
           },
           createdAt: now,
           updatedAt: now,
@@ -942,6 +1002,65 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       sendApiError(res, 400, 'BAD_REQUEST', String(err));
     }
+  });
+
+  // ---- Dev server management ----
+
+  app.get('/api/projects/:id/dev-server', (req, res) => {
+    const running = devServers.get(req.params.id);
+    if (running) {
+      res.json({ running: true, url: running.url, port: running.port });
+    } else {
+      res.json({ running: false, url: null, port: null });
+    }
+  });
+
+  app.post('/api/projects/:id/dev-server/start', async (req, res) => {
+    try {
+      const project = getProject(db, req.params.id);
+      if (!project) return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
+      const ds = project.metadata?.devServer;
+      if (!ds) return sendApiError(res, 400, 'BAD_REQUEST', 'project has no dev server config');
+
+      // Already running — return existing URL
+      const existing = devServers.get(project.id);
+      if (existing) {
+        return res.json({ url: existing.url, port: existing.port, pid: existing.child.pid });
+      }
+
+      // Compute absolute cwd
+      const folderPath = project.metadata?.folderPath ?? project.metadata?.originalFolderPath;
+      if (typeof folderPath !== 'string') return sendApiError(res, 400, 'BAD_REQUEST', 'project has no folder path');
+      const cwd = ds.cwd ? path.join(folderPath, ds.cwd) : folderPath;
+
+      // Parse script into command + args
+      const parts = ds.script.split(/\s+/);
+      const cmd = parts[0];
+      const args = parts.slice(1);
+      const child = spawn(cmd, args, { cwd, stdio: 'ignore', detached: false, shell: false });
+      const url = `http://localhost:${ds.port}`;
+      devServers.set(project.id, { child, url, port: ds.port });
+
+      child.on('close', () => devServers.delete(project.id));
+
+      const ready = await waitForDevServer(ds.port);
+      if (!ready) {
+        child.kill();
+        devServers.delete(project.id);
+        return sendApiError(res, 500, 'INTERNAL_ERROR', 'dev server did not start in time');
+      }
+      res.json({ url, port: ds.port, pid: child.pid });
+    } catch (err) {
+      sendApiError(res, 500, 'INTERNAL_ERROR', String(err));
+    }
+  });
+
+  app.delete('/api/projects/:id/dev-server/stop', (req, res) => {
+    const entry = devServers.get(req.params.id);
+    if (!entry) return res.json({ ok: true });
+    entry.child.kill();
+    devServers.delete(req.params.id);
+    res.json({ ok: true });
   });
 
   app.get('/api/projects/:id', (req, res) => {
