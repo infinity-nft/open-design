@@ -28,6 +28,7 @@ interface Props {
   previewComments?: PreviewComment[];
   onSavePreviewComment?: (target: PreviewCommentTarget, note: string, attachAfterSave: boolean) => Promise<PreviewComment | null>;
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
+  onSendToChat?: (text: string, imageFile?: File) => Promise<void> | void;
 }
 
 interface SketchState {
@@ -53,6 +54,7 @@ export function FileWorkspace({
   previewComments = [],
   onSavePreviewComment,
   onRemovePreviewComment,
+  onSendToChat,
 }: Props) {
   const t = useT();
   // Persisted tabs come from the parent. Active tab can transiently point
@@ -411,6 +413,7 @@ export function FileWorkspace({
             previewComments={previewComments.filter((comment) => comment.filePath === activeFile.name)}
             onSavePreviewComment={onSavePreviewComment}
             onRemovePreviewComment={onRemovePreviewComment}
+            onSendToChat={onSendToChat}
           />
         ) : (
           <div className="viewer-empty">

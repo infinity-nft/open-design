@@ -16,7 +16,7 @@
  */
 export function buildSrcdoc(
   html: string,
-  options: { deck?: boolean; baseHref?: string; initialSlideIndex?: number; commentBridge?: boolean } = {}
+  options: { deck?: boolean; baseHref?: string; initialSlideIndex?: number; commentBridge?: boolean; scrollBridge?: boolean } = {}
 ): string {
   const head = html.trimStart().slice(0, 64).toLowerCase();
   const isFullDoc = head.startsWith("<!doctype") || head.startsWith("<html");
@@ -38,7 +38,8 @@ export function buildSrcdoc(
   const withBase = options.baseHref ? injectBaseHref(withCsp, options.baseHref) : withCsp;
   const withShim = injectSandboxShim(withBase);
   const withDeck = options.deck ? injectDeckBridge(withShim, options.initialSlideIndex) : withShim;
-  return options.commentBridge ? injectCommentBridge(withDeck) : withDeck;
+  const withComment = options.commentBridge ? injectCommentBridge(withDeck) : withDeck;
+  return options.scrollBridge ? injectScrollBridge(withComment) : withComment;
 }
 
 // Threat model: the iframe is sandboxed without `allow-same-origin`, so
@@ -245,6 +246,17 @@ html[data-od-comment-mode] [data-screen-label] { cursor: crosshair !important; }
       : style + doc;
   if (/<\/body>/i.test(withStyle)) return withStyle.replace(/<\/body>/i, script + '</body>');
   return withStyle + script;
+}
+
+function injectScrollBridge(doc: string): string {
+  const script = `<script data-od-scroll-bridge>(function(){
+  window.addEventListener('message', function(ev){
+    if (!ev.data || ev.data.type !== 'od:scroll') return;
+    window.scrollBy(ev.data.x || 0, ev.data.y || 0);
+  });
+})();</script>`;
+  if (/<\/body>/i.test(doc)) return doc.replace(/<\/body>/i, script + '</body>');
+  return doc + script;
 }
 
 // The deck bridge supports three deck conventions found across our skills

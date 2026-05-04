@@ -17,6 +17,7 @@ import {
   fetchSkill,
   patchPreviewCommentStatus,
   upsertPreviewComment,
+  uploadProjectFiles,
   writeProjectTextFile,
 } from '../providers/registry';
 import { composeSystemPrompt } from '@open-design/contracts';
@@ -1402,6 +1403,20 @@ export function ProjectView({
             previewComments={previewComments}
             onSavePreviewComment={savePreviewComment}
             onRemovePreviewComment={removePreviewComment}
+            onSendToChat={async (text, imageFile) => {
+              const id = await handleEnsureProject();
+              if (!id) return;
+              let attachments: ChatAttachment[] = [];
+              if (imageFile) {
+                const result = await uploadProjectFiles(id, [imageFile]);
+                const uploaded = result.uploaded[0];
+                if (uploaded) {
+                  attachments = [{ path: uploaded.path, name: uploaded.name, kind: 'image', size: uploaded.size }];
+                  void refreshProjectFiles();
+                }
+              }
+              void handleSend(text, attachments);
+            }}
           />
         )}
       </div>

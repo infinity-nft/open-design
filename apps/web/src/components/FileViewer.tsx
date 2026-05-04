@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MarkdownRenderer, artifactRendererRegistry } from '../artifacts/renderer-registry';
 import { renderMarkdownToSafeHtml } from '../artifacts/markdown';
 import { useT } from '../i18n';
@@ -13,7 +13,9 @@ import {
   projectFileUrl,
   projectRawUrl,
   updateDeployConfig,
+  writeProjectTextFile,
 } from '../providers/registry';
+import { SketchEditor, type SketchItem } from './SketchEditor';
 import type { ProjectFilePreview } from '../providers/registry';
 import {
   exportAsHtml,
@@ -51,6 +53,7 @@ interface Props {
   previewComments?: PreviewComment[];
   onSavePreviewComment?: (target: PreviewCommentTarget, note: string, attachAfterSave: boolean) => Promise<PreviewComment | null>;
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
+  onSendToChat?: (text: string, imageFile?: File) => Promise<void> | void;
 }
 
 export function FileViewer({
@@ -63,6 +66,7 @@ export function FileViewer({
   previewComments = [],
   onSavePreviewComment,
   onRemovePreviewComment,
+  onSendToChat,
 }: Props) {
   const rendererMatch = artifactRendererRegistry.resolve({
     file,
@@ -81,6 +85,7 @@ export function FileViewer({
         previewComments={previewComments}
         onSavePreviewComment={onSavePreviewComment}
         onRemovePreviewComment={onRemovePreviewComment}
+        onSendToChat={onSendToChat}
       />
     );
   }
@@ -582,6 +587,7 @@ function HtmlViewer({
   previewComments = [],
   onSavePreviewComment,
   onRemovePreviewComment,
+  onSendToChat,
 }: {
   projectId: string;
   file: ProjectFile;
@@ -591,10 +597,18 @@ function HtmlViewer({
   streaming: boolean;
   previewComments?: PreviewComment[];
   onSavePreviewComment?: (target: PreviewCommentTarget, note: string, attachAfterSave: boolean) => Promise<PreviewComment | null>;
+  onSendToChat?: (text: string, imageFile?: File) => Promise<void> | void;
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
 }) {
   const t = useT();
-  const [mode, setMode] = useState<'preview' | 'source'>('preview');
+  const [mode, setMode] = useState<'preview' | 'source' | 'edit' | 'draw'>('preview');
+  const [editDraft, setEditDraft] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [drawItems, setDrawItems] = useState<SketchItem[]>([]);
+  const [drawText, setDrawText] = useState('');
+  const [drawSending, setDrawSending] = useState(false);
+  const drawCanvasRef = useRef<HTMLCanvasElement | null>(null) as React.MutableRefObject<HTMLCanvasElement | null>;
+  const drawIframeRef = useRef<HTMLIFrameElement | null>(null);
   const [source, setSource] = useState<string | null>(liveHtml ?? null);
   const [inlinedSource, setInlinedSource] = useState<string | null>(null);
   const [zoom, setZoom] = useState(100);
@@ -699,6 +713,23 @@ function HtmlViewer({
       commentBridge: commentMode,
     }) : ''),
     [previewSource, effectiveDeck, projectId, file.name, previewStateKey, commentMode],
+  );
+
+  const editSrcDoc = useMemo(
+    () => (editDraft ? buildSrcdoc(editDraft, {
+      deck: effectiveDeck,
+      baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
+    }) : ''),
+    [editDraft, effectiveDeck, projectId, file.name],
+  );
+
+  const drawSrcDoc = useMemo(
+    () => (previewSource ? buildSrcdoc(previewSource, {
+      deck: effectiveDeck,
+      baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
+      scrollBridge: true,
+    }) : ''),
+    [previewSource, effectiveDeck, projectId, file.name],
   );
 
   useEffect(() => {
@@ -807,6 +838,38 @@ function HtmlViewer({
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.postMessage({ type: 'od:slide', action }, '*');
+  }
+
+  async function saveEdit() {
+    if (editDraft === null) return;
+    setEditSaving(true);
+    await writeProjectTextFile(projectId, file.name, editDraft);
+    setEditSaving(false);
+    setSource(editDraft);
+    setMode('preview');
+  }
+
+  async function sendDrawAnnotation() {
+    if (!onSendToChat) return;
+    setDrawSending(true);
+    let imageFile: File | undefined;
+    const cvs = drawCanvasRef.current;
+    if (cvs && drawItems.length > 0) {
+      await new Promise<void>((resolve) => {
+        cvs.toBlob((blob) => {
+          if (blob) {
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            imageFile = new File([blob], `sketch-${stamp}.png`, { type: 'image/png' });
+          }
+          resolve();
+        }, 'image/png');
+      });
+    }
+    await onSendToChat(drawText || 'Apply the changes shown in the sketch annotation.', imageFile);
+    setDrawSending(false);
+    setDrawText('');
+    setDrawItems([]);
+    setMode('preview');
   }
 
   // Keyboard nav on the host, so the user can press ←/→ even when focus
@@ -1167,21 +1230,26 @@ function HtmlViewer({
             <span>{t('fileViewer.comment')}</span>
           </button>
           <button
-            className="viewer-action"
+            className={`viewer-action${mode === 'edit' ? ' active' : ''}`}
             type="button"
-            disabled
-            data-coming-soon="true"
             title={t('fileViewer.edit')}
+            onClick={() => {
+              if (mode === 'edit') {
+                setMode('preview');
+              } else {
+                setEditDraft(source ?? '');
+                setMode('edit');
+              }
+            }}
           >
             <Icon name="edit" size={13} />
             <span>{t('fileViewer.edit')}</span>
           </button>
           <button
-            className="viewer-action"
+            className={`viewer-action${mode === 'draw' ? ' active' : ''}`}
             type="button"
-            disabled
-            data-coming-soon="true"
             title={t('fileViewer.draw')}
+            onClick={() => setMode(mode === 'draw' ? 'preview' : 'draw')}
           >
             <Icon name="draw" size={13} />
             <span>{t('fileViewer.draw')}</span>
@@ -1378,6 +1446,90 @@ function HtmlViewer({
       <div className="viewer-body" ref={previewBodyRef}>
         {source === null ? (
           <div className="viewer-empty">{t('fileViewer.loading')}</div>
+        ) : mode === 'edit' ? (
+          <div className="viewer-edit-split">
+            <textarea
+              className="viewer-edit-source"
+              value={editDraft ?? ''}
+              onChange={(e) => setEditDraft(e.target.value)}
+              spellCheck={false}
+            />
+            <div className="viewer-edit-preview">
+              <iframe
+                title={`${file.name} preview`}
+                sandbox="allow-scripts"
+                srcDoc={editSrcDoc}
+              />
+            </div>
+            <div className="viewer-edit-actions">
+              <button className="ghost" onClick={() => setMode('preview')}>
+                {t('common.cancel')}
+              </button>
+              <button
+                className="primary"
+                onClick={() => void saveEdit()}
+                disabled={editSaving || editDraft === source}
+              >
+                {editSaving ? t('sketch.saving') : t('common.save')}
+              </button>
+            </div>
+          </div>
+        ) : mode === 'draw' ? (
+          <div className="draw-mode-wrap">
+            <div
+              className="draw-preview-layer"
+              onWheel={(e) => {
+                drawIframeRef.current?.contentWindow?.postMessage(
+                  { type: 'od:scroll', x: e.deltaX, y: e.deltaY },
+                  '*',
+                );
+              }}
+            >
+              <iframe
+                ref={drawIframeRef}
+                title={file.name}
+                sandbox="allow-scripts"
+                srcDoc={drawSrcDoc}
+                style={{ width: '100%', height: '100%', border: 'none' }}
+              />
+              <SketchEditor
+                overlay
+                canvasRef={drawCanvasRef}
+                fileName={file.name}
+                items={drawItems}
+                onItemsChange={setDrawItems}
+                onSave={() => setMode('preview')}
+                onCancel={() => setMode('preview')}
+              />
+            </div>
+            <div className="draw-compose-bar">
+              <textarea
+                className="draw-compose-input"
+                placeholder="Describe what to change… e.g. «make the button red» or «move the logo higher»"
+                value={drawText}
+                onChange={(e) => setDrawText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    if (!drawSending && onSendToChat) void sendDrawAnnotation();
+                  }
+                }}
+              />
+              <div className="draw-compose-actions">
+                <span className="draw-compose-hint">⌘↵ to send</span>
+                <button className="ghost" onClick={() => { setMode('preview'); setDrawText(''); setDrawItems([]); }}>
+                  {t('common.cancel')}
+                </button>
+                <button
+                  className="primary"
+                  disabled={drawSending || (!drawText.trim() && drawItems.length === 0) || !onSendToChat}
+                  onClick={() => void sendDrawAnnotation()}
+                >
+                  {drawSending ? 'Sending…' : 'Send to Claude'}
+                </button>
+              </div>
+            </div>
+          </div>
         ) : mode === 'preview' ? (
           <div className="comment-preview-layer">
             <div
