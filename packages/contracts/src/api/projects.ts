@@ -86,6 +86,12 @@ export interface ProjectMetadata {
   promptTemplate?: PromptTemplateMetadata;
   // Absolute paths to local code folders the agent can read via --add-dir.
   linkedDirs?: string[];
+  // Dev server config for folder-imported projects (Next.js, Vite, CRA, etc.)
+  devServer?: {
+    script: string;  // e.g. "npm run dev"
+    cwd: string;     // relative subdir inside folderPath where script runs
+    port: number;    // port the server listens on
+  };
 }
 
 export interface Project {

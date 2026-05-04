@@ -55,6 +55,8 @@ import {
   saveMessage,
   saveTabs,
   type SaveMessageOptions,
+  startDevServer,
+  stopDevServer,
 } from '../state/projects';
 import type {
   AgentEvent,
@@ -283,6 +285,8 @@ export function ProjectView({
   // include a nonce so re-clicking the same name after the user closed the
   // tab still focuses it.
   const [openRequest, setOpenRequest] = useState<{ name: string; nonce: number } | null>(null);
+  const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
+  const [devServerStarting, setDevServerStarting] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const cancelRef = useRef<AbortController | null>(null);
   const sendTextBufferRef = useRef<BufferedTextUpdates | null>(null);
@@ -466,6 +470,24 @@ export function ProjectView({
       }
     }
   }, [streaming, messages, config.notifications, t]);
+
+  // Auto-start dev server for folder-imported projects that have a devServer config.
+  useEffect(() => {
+    if (!project.metadata?.devServer) return;
+    let cancelled = false;
+    setDevServerStarting(true);
+    void startDevServer(project.id).then((result) => {
+      if (cancelled) return;
+      setDevServerStarting(false);
+      if (result?.url) setDevServerUrl(result.url);
+    });
+    return () => {
+      cancelled = true;
+      void stopDevServer(project.id);
+      setDevServerUrl(null);
+      setDevServerStarting(false);
+    };
+  }, [project.id, project.metadata?.devServer]);
 
   // Hydrate the open-tabs state once per project. After this initial
   // load, every mutation flows through saveTabsState() which keeps DB +
@@ -1892,28 +1914,88 @@ export function ProjectView({
             onBlur={handleChatResizeBlur}
           />
         ) : null}
-        <FileWorkspace
-          projectId={project.id}
-          files={projectFiles}
-          liveArtifacts={liveArtifacts}
-          onRefreshFiles={() => {
-            void refreshWorkspaceItems();
-          }}
-          isDeck={isDeck}
-          onExportAsPptx={handleExportAsPptx}
-          streaming={streaming}
-          openRequest={openRequest}
-          liveArtifactEvents={liveArtifactEvents}
-          tabsState={openTabsState}
-          onTabsStateChange={persistTabsState}
-          previewComments={previewComments}
-          onSavePreviewComment={savePreviewComment}
-          onRemovePreviewComment={removePreviewComment}
-          onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
-          focusMode={workspaceFocused}
-          onFocusModeChange={setWorkspaceFocused}
-        />
+        {devServerUrl ? (
+          <DevServerViewer
+            url={devServerUrl}
+            projectName={project.name}
+            onStop={() => {
+              void stopDevServer(project.id);
+              setDevServerUrl(null);
+            }}
+          />
+        ) : devServerStarting ? (
+          <DevServerViewer url={null} projectName={project.name} onStop={null} />
+        ) : (
+          <FileWorkspace
+            projectId={project.id}
+            files={projectFiles}
+            liveArtifacts={liveArtifacts}
+            onRefreshFiles={() => {
+              void refreshWorkspaceItems();
+            }}
+            isDeck={isDeck}
+            onExportAsPptx={handleExportAsPptx}
+            streaming={streaming}
+            openRequest={openRequest}
+            liveArtifactEvents={liveArtifactEvents}
+            tabsState={openTabsState}
+            onTabsStateChange={persistTabsState}
+            previewComments={previewComments}
+            onSavePreviewComment={savePreviewComment}
+            onRemovePreviewComment={removePreviewComment}
+            onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
+            focusMode={workspaceFocused}
+            onFocusModeChange={setWorkspaceFocused}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+function DevServerViewer({
+  url,
+  projectName,
+  onStop,
+}: {
+  url: string | null;
+  projectName: string;
+  onStop: (() => void) | null;
+}) {
+  return (
+    <div className="dev-server-viewer">
+      <div className="dev-server-toolbar">
+        <span className="dev-server-label">
+          {url ? (
+            <>
+              <span className="dev-server-dot running" />
+              {projectName}
+            </>
+          ) : (
+            <>
+              <span className="dev-server-dot starting" />
+              Starting dev server…
+            </>
+          )}
+        </span>
+        {url && onStop ? (
+          <button type="button" className="ghost dev-server-stop" onClick={onStop}>
+            Stop
+          </button>
+        ) : null}
+      </div>
+      {url ? (
+        <iframe
+          src={url}
+          title={projectName}
+          className="dev-server-frame"
+          allow="clipboard-read; clipboard-write"
+        />
+      ) : (
+        <div className="dev-server-loading">
+          <span className="dev-server-spinner" />
+        </div>
+      )}
     </div>
   );
 }

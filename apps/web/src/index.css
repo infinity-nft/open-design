@@ -3866,6 +3866,77 @@ code {
   text-align: center;
 }
 
+/* ---- Dev Server Viewer ---- */
+.dev-server-viewer {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  background: #fff;
+}
+.dev-server-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--surface-1, #f0ede8);
+  border-bottom: 1px solid var(--border, rgba(0,0,0,.08));
+  flex-shrink: 0;
+}
+.dev-server-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+}
+.dev-server-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dev-server-dot.running { background: #22c55e; }
+.dev-server-dot.starting {
+  background: #f59e0b;
+  animation: dev-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dev-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.dev-server-stop {
+  font-size: 11px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+}
+.dev-server-frame {
+  flex: 1 1 0;
+  width: 100%;
+  border: none;
+  min-height: 0;
+}
+.dev-server-loading {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dev-server-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border, rgba(0,0,0,.12));
+  border-top-color: var(--text-primary);
+  border-radius: 50%;
+  animation: dev-spin 0.8s linear infinite;
+}
+@keyframes dev-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* -------- Fidelity cards (prototype tab) ---------------------------- */
 .fidelity-grid {
   display: grid;
