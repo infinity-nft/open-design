@@ -1500,6 +1500,11 @@ function HtmlViewer({
                 onItemsChange={setDrawItems}
                 onSave={() => setMode('preview')}
                 onCancel={() => setMode('preview')}
+                onHandPan={(dx, dy) => {
+                  drawIframeRef.current?.contentWindow?.postMessage(
+                    { type: 'od:scroll', x: dx, y: dy }, '*',
+                  );
+                }}
               />
             </div>
             <div className="draw-compose-bar">

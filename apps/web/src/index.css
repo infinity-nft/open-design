@@ -2034,32 +2034,7 @@ code {
 }
 
 /* ---- Dev Server Viewer ---- */
-.dev-server-viewer {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  background: #fff;
-}
-.dev-server-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  background: var(--surface-1, #f0ede8);
-  border-bottom: 1px solid var(--border, rgba(0,0,0,.08));
-  flex-shrink: 0;
-}
-.dev-server-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-primary);
-  flex: 1;
-}
+/* ---- Dev Server Viewer -------------------------------------------- */
 .dev-server-dot {
   width: 7px;
   height: 7px;
@@ -2075,19 +2050,100 @@ code {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
-.dev-server-stop {
-  font-size: 11px;
-  padding: 2px 8px;
-  flex-shrink: 0;
+
+/* Label shown in viewer-toolbar-left */
+.dev-server-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+/* viewer-body: dot-grid background, clips frame-wrap */
+.dev-server-viewer .viewer-body {
+  overflow: hidden;
+  background-color: var(--bg-subtle, #f5f4f2);
+  background-image: radial-gradient(var(--border, #bfbcb6) 1px, transparent 0);
+  background-size: 16px 16px;
+  background-position: 12px 12px;
+}
+
+/* Frame wrapper — fills the viewer-body, centres content */
+.dev-server-frame-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+/* Full-width mode: iframe stretches to fill */
 .dev-server-frame {
   flex: 1 1 0;
-  width: 100%;
   border: none;
-  min-height: 0;
+  display: block;
+  background: #fff;
 }
+
+/* Mobile mode: phone-shaped frame, scrollable when content is taller */
+.dev-server-frame-wrap.mobile {
+  overflow-y: auto;
+  overflow-x: hidden;
+  align-items: flex-start;
+  padding: 16px 0;
+}
+.dev-server-frame-wrap.mobile .dev-server-frame,
+.dev-server-viewer .viewer-body .dev-server-frame-wrap.mobile .dev-server-frame {
+  flex: 0 0 390px;
+  width: 390px;
+  /* Fixed viewport height matching iPhone 14 — app uses 100vh correctly */
+  height: 844px;
+  min-height: unset;
+  border-radius: 40px;
+  box-shadow: 0 8px 48px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.08);
+  overflow: hidden;
+  /* zoom transform applied via inline style — don't let the frame clip */
+  transform-origin: top center;
+}
+
+/* In draw mode the preview layer is position:relative (from .draw-preview-layer),
+   so the frame-wrap must fill it absolutely */
+.dev-server-viewer .draw-preview-layer .dev-server-frame-wrap {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* Mobile inside draw mode: allow scroll + start from top */
+.dev-server-viewer .draw-preview-layer .dev-server-frame-wrap.mobile {
+  overflow-y: auto;
+  align-items: flex-start;
+}
+
+/* Hand tool cursor — pointer-events stay on canvas (drag is handled in JS) */
+.sketch-editor[data-tool="hand"] .sketch-canvas-wrap {
+  cursor: grab;
+}
+.sketch-editor[data-tool="hand"] .sketch-canvas-wrap:active {
+  cursor: grabbing;
+}
+
+/* Interact mode — pass all pointer events through to the iframe */
+.draw-preview-layer[data-interact] .sketch-canvas-wrap {
+  pointer-events: none !important;
+}
+
+/* Loading spinner */
 .dev-server-loading {
-  flex: 1 1 0;
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
