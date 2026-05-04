@@ -1,4 +1,4 @@
-import {
+import React, {
   useCallback,
   useEffect,
   useMemo,
@@ -91,6 +91,8 @@ import { ChatPane } from './ChatPane';
 import { decideAutoOpenAfterWrite } from './auto-open-file';
 import { FileWorkspace } from './FileWorkspace';
 import { CenteredLoader } from './Loading';
+import { Icon } from './Icon';
+import { SketchEditor, type SketchItem } from './SketchEditor';
 
 interface Props {
   project: Project;
@@ -1923,9 +1925,23 @@ export function ProjectView({
               void stopDevServer(project.id);
               setDevServerUrl(null);
             }}
+            onSendToChat={async (text, imageFile) => {
+              const id = await handleEnsureProject();
+              if (!id) return;
+              let attachments: ChatAttachment[] = [];
+              if (imageFile) {
+                const result = await uploadProjectFiles(id, [imageFile]);
+                const uploaded = result.uploaded[0];
+                if (uploaded) {
+                  attachments = [{ path: uploaded.path, name: uploaded.name, kind: 'image', size: uploaded.size }];
+                  void refreshProjectFiles();
+                }
+              }
+              void handleSend(text, attachments);
+            }}
           />
         ) : devServerStarting ? (
-          <DevServerViewer url={null} projectName={project.name} onStop={null} />
+          <DevServerViewer url={null} projectName={project.name} onStop={null} onSendToChat={null} />
         ) : (
           <FileWorkspace
             projectId={project.id}
@@ -1972,45 +1988,259 @@ function DevServerViewer({
   url,
   projectName,
   onStop,
+  onSendToChat,
 }: {
   url: string | null;
   projectName: string;
   onStop: (() => void) | null;
+  onSendToChat: ((text: string, imageFile?: File) => Promise<void> | void) | null;
 }) {
+  const [mobile, setMobile] = useState(true);
+  const [zoom, setZoom] = useState(85);
+  const [mode, setMode] = useState<'preview' | 'draw'>('preview');
+  const [interact, setInteract] = useState(false);
+  const [drawItems, setDrawItems] = useState<SketchItem[]>([]);
+  const [drawText, setDrawText] = useState('');
+  const [drawSending, setDrawSending] = useState(false);
+  const drawCanvasRef = useRef<HTMLCanvasElement | null>(null) as React.MutableRefObject<HTMLCanvasElement | null>;
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const frameWrapRef = useRef<HTMLDivElement | null>(null);
+
+  function handleHandPan(dx: number, dy: number) {
+    // 1. Scroll the frame-wrap container (pans visible area of the phone).
+    const wrap = frameWrapRef.current;
+    if (wrap) {
+      wrap.scrollTop -= dy;
+      wrap.scrollLeft -= dx;
+    }
+    // 2. Best-effort: dispatch a wheel event to the iframe element so Chromium
+    //    may forward it to the iframe's scroll containers.
+    const iframe = iframeRef.current;
+    if (iframe) {
+      iframe.dispatchEvent(
+        new WheelEvent('wheel', { deltaX: -dx, deltaY: -dy, deltaMode: 0, bubbles: true }),
+      );
+    }
+  }
+
+  function bumpZoom(delta: number) {
+    setZoom((z) => Math.max(40, Math.min(150, z + delta)));
+  }
+
+  function exitDraw() {
+    setMode('preview');
+    setDrawItems([]);
+    setDrawText('');
+    setInteract(false);
+  }
+
+  async function sendDrawAnnotation() {
+    if (drawSending || !onSendToChat) return;
+    setDrawSending(true);
+    try {
+      let imageFile: File | undefined;
+      const cvs = drawCanvasRef.current;
+      if (cvs && drawItems.length > 0) {
+        imageFile = await new Promise<File | undefined>((res) => {
+          cvs.toBlob((blob) => {
+            res(blob ? new File([blob], 'draw-annotation.png', { type: 'image/png' }) : undefined);
+          }, 'image/png');
+        });
+      }
+      await onSendToChat(drawText || 'See the annotation.', imageFile);
+      exitDraw();
+    } finally {
+      setDrawSending(false);
+    }
+  }
+
+  const scale = zoom / 100;
+  // transform-origin: top center — the phone shrinks downward.
+  // Compensate layout height so the frame-wrap hugs the visible phone.
+  const phoneH = 844;
+  const frameStyle: React.CSSProperties | undefined = mobile
+    ? {
+        transform: `scale(${scale})`,
+        transformOrigin: 'top center',
+        // Pull up the empty space below after scaling down
+        marginBottom: `${(scale - 1) * phoneH}px`,
+      }
+    : undefined;
+
+  const frameWrap = (ref?: React.MutableRefObject<HTMLIFrameElement | null>) => (
+    <div className={`dev-server-frame-wrap${mobile ? ' mobile' : ''}`} ref={frameWrapRef}>
+      <iframe
+        ref={ref}
+        src={url ?? undefined}
+        title={projectName}
+        className="dev-server-frame"
+        allow="clipboard-read; clipboard-write"
+        style={frameStyle}
+      />
+    </div>
+  );
+
   return (
-    <div className="dev-server-viewer">
-      <div className="dev-server-toolbar">
-        <span className="dev-server-label">
+    <div className="viewer html-viewer dev-server-viewer">
+      <div className="viewer-toolbar">
+        <div className="viewer-toolbar-left">
+          <button
+            type="button"
+            className="icon-only"
+            title="Reload"
+            onClick={() => {
+              const f = iframeRef.current;
+              if (f) { f.src = f.src; }
+            }}
+          >
+            <Icon name="reload" size={14} />
+          </button>
+          <span className="dev-server-label">
+            {url ? (
+              <><span className="dev-server-dot running" />{projectName}</>
+            ) : (
+              <><span className="dev-server-dot starting" />Starting…</>
+            )}
+          </span>
+        </div>
+        <div className="viewer-toolbar-actions">
           {url ? (
             <>
-              <span className="dev-server-dot running" />
-              {projectName}
+              <div className="viewer-tabs">
+                <button
+                  className={`viewer-tab${mode === 'preview' ? ' active' : ''}`}
+                  onClick={exitDraw}
+                >
+                  Preview
+                </button>
+                {onSendToChat ? (
+                  <button
+                    className={`viewer-tab${mode === 'draw' ? ' active' : ''}`}
+                    onClick={() => mode === 'draw' ? exitDraw() : setMode('draw')}
+                  >
+                    Draw
+                  </button>
+                ) : null}
+              </div>
+              {mode === 'draw' ? (
+                <>
+                  <span className="viewer-divider" aria-hidden />
+                  <button
+                    type="button"
+                    className={`viewer-action${interact ? ' active' : ''}`}
+                    title={interact ? 'Back to drawing' : 'Interact with the app'}
+                    onClick={() => setInteract((v) => !v)}
+                  >
+                    <Icon name="play" size={13} />
+                    <span>Interact</span>
+                  </button>
+                </>
+              ) : null}
+              <span className="viewer-divider" aria-hidden />
+              <button
+                type="button"
+                className={`viewer-action${mobile ? ' active' : ''}`}
+                title={mobile ? 'Switch to full width' : 'Switch to mobile width'}
+                onClick={() => setMobile((v) => !v)}
+              >
+                <Icon name="grid" size={13} />
+                <span>{mobile ? 'Mobile' : 'Full'}</span>
+              </button>
+              <span className="viewer-divider" aria-hidden />
+              <button
+                type="button"
+                className="icon-only"
+                title="Zoom out"
+                onClick={() => bumpZoom(-10)}
+                disabled={zoom <= 40}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+              <button
+                type="button"
+                className="viewer-action"
+                title="Reset zoom"
+                onClick={() => setZoom(85)}
+                style={{ minWidth: 44, fontVariantNumeric: 'tabular-nums' }}
+              >
+                {zoom}%
+              </button>
+              <button
+                type="button"
+                className="icon-only"
+                title="Zoom in"
+                onClick={() => bumpZoom(10)}
+                disabled={zoom >= 150}
+              >
+                <Icon name="plus" size={14} />
+              </button>
+              {onStop ? (
+                <>
+                  <span className="viewer-divider" aria-hidden />
+                  <button type="button" className="viewer-action" onClick={onStop}>
+                    <Icon name="stop" size={13} />
+                    <span>Stop</span>
+                  </button>
+                </>
+              ) : null}
             </>
-          ) : (
-            <>
-              <span className="dev-server-dot starting" />
-              Starting dev server…
-            </>
-          )}
-        </span>
-        {url && onStop ? (
-          <button type="button" className="ghost dev-server-stop" onClick={onStop}>
-            Stop
-          </button>
-        ) : null}
-      </div>
-      {url ? (
-        <iframe
-          src={url}
-          title={projectName}
-          className="dev-server-frame"
-          allow="clipboard-read; clipboard-write"
-        />
-      ) : (
-        <div className="dev-server-loading">
-          <span className="dev-server-spinner" />
+          ) : null}
         </div>
-      )}
+      </div>
+
+      <div className="viewer-body">
+        {!url ? (
+          <div className="dev-server-loading">
+            <span className="dev-server-spinner" />
+          </div>
+        ) : mode === 'draw' ? (
+          <div className="draw-mode-wrap">
+            <div
+              className="draw-preview-layer"
+              data-interact={interact || undefined}
+            >
+              {frameWrap(iframeRef)}
+              <SketchEditor
+                overlay
+                canvasRef={drawCanvasRef}
+                fileName={projectName}
+                items={drawItems}
+                onItemsChange={setDrawItems}
+                onSave={exitDraw}
+                onCancel={exitDraw}
+                onHandPan={handleHandPan}
+              />
+            </div>
+            <div className="draw-compose-bar">
+              <textarea
+                className="draw-compose-input"
+                placeholder="Describe what to change… e.g. «make the button red» or «move the logo higher»"
+                value={drawText}
+                onChange={(e) => setDrawText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    void sendDrawAnnotation();
+                  }
+                }}
+              />
+              <div className="draw-compose-actions">
+                <span className="draw-compose-hint">⌘↵ to send</span>
+                <button className="ghost" onClick={exitDraw}>Cancel</button>
+                <button
+                  className="primary"
+                  disabled={drawSending || (!drawText.trim() && drawItems.length === 0)}
+                  onClick={() => void sendDrawAnnotation()}
+                >
+                  {drawSending ? 'Sending…' : 'Send to Claude'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          frameWrap(iframeRef)
+        )}
+      </div>
     </div>
   );
 }

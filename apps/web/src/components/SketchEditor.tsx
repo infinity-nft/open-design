@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useT } from '../i18n';
 
-export type Tool = 'select' | 'pen' | 'text' | 'rect' | 'arrow' | 'eraser';
+export type Tool = 'select' | 'pen' | 'text' | 'rect' | 'arrow' | 'eraser' | 'hand';
 
 interface Stroke {
   kind: 'pen';
@@ -59,6 +59,8 @@ interface Props {
   overlay?: boolean;
   // Expose the canvas element to the parent (for PNG capture in overlay mode).
   canvasRef?: React.MutableRefObject<HTMLCanvasElement | null>;
+  // Called when the hand tool drags or scrolls — parent decides what to scroll.
+  onHandPan?: (dx: number, dy: number) => void;
 }
 
 export function SketchEditor({
@@ -71,6 +73,7 @@ export function SketchEditor({
   fileName,
   overlay = false,
   canvasRef: externalCanvasRef,
+  onHandPan,
 }: Props) {
   const t = useT();
   const internalCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -80,6 +83,7 @@ export function SketchEditor({
   const [color, setColor] = useState('#1c1b1a');
   const [size, setSize] = useState(2);
   const drawingRef = useRef<SketchItem | null>(null);
+  const handDragging = useRef(false);
   const [, force] = useState(0);
   // Text-tool modal. Replaces window.prompt() because Electron 28+
   // disables that API by default and silently returns null, making
@@ -138,6 +142,10 @@ export function SketchEditor({
     const cvs = canvasRef.current;
     if (!cvs) return;
     cvs.setPointerCapture(e.pointerId);
+    if (tool === 'hand') {
+      handDragging.current = true;
+      return;
+    }
     const pos = pointerPos(e);
 
     if (tool === 'text') {
@@ -173,6 +181,12 @@ export function SketchEditor({
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (tool === 'hand') {
+      if (handDragging.current) {
+        onHandPan?.(e.movementX, e.movementY);
+      }
+      return;
+    }
     const cur = drawingRef.current;
     if (!cur) return;
     const pos = pointerPos(e);
@@ -189,6 +203,10 @@ export function SketchEditor({
   }
 
   function handlePointerUp() {
+    if (tool === 'hand') {
+      handDragging.current = false;
+      return;
+    }
     const cur = drawingRef.current;
     drawingRef.current = null;
     if (!cur) return;
@@ -225,9 +243,10 @@ export function SketchEditor({
   }
 
   return (
-    <div className={`sketch-editor${overlay ? ' sketch-overlay' : ''}`}>
+    <div className={`sketch-editor${overlay ? ' sketch-overlay' : ''}`} data-tool={tool}>
       <div className="sketch-toolbar">
-        <ToolBtn cur={tool} v="select" onClick={setTool} title={t('sketch.toolSelect')} label="↖" />
+        <ToolBtn cur={tool} v="hand" onClick={setTool} title="Hand (scroll)" label="✥" />
+        <span className="sketch-divider" />
         <ToolBtn cur={tool} v="pen" onClick={setTool} title={t('sketch.toolPen')} label="✎" />
         <ToolBtn cur={tool} v="text" onClick={setTool} title={t('sketch.toolText')} label="T" />
         <ToolBtn cur={tool} v="rect" onClick={setTool} title={t('sketch.toolRect')} label="▭" />
@@ -275,14 +294,21 @@ export function SketchEditor({
           {saving ? t('sketch.saving') : t('common.save')}
         </button>
       </div>
-      <div className="sketch-canvas-wrap" ref={wrapRef}>
+      <div
+        className="sketch-canvas-wrap"
+        ref={wrapRef}
+        onWheel={tool === 'hand' ? (e) => {
+          e.preventDefault();
+          onHandPan?.(e.deltaX, e.deltaY);
+        } : undefined}
+      >
         <canvas
           ref={canvasRef}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
-          style={{ touchAction: 'none' }}
+          style={{ touchAction: 'none', cursor: tool === 'hand' ? 'grab' : undefined }}
         />
       </div>
       {textModalOpen ? (
