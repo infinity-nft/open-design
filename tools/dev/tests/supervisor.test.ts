@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { APP_KEYS } from "@open-design/sidecar-proto";
 
-import { runSupervisor } from "./supervisor.js";
+import { runSupervisor } from "../src/supervisor.js";
 
 // Minimal stub for AppRuntimeLookup — the supervisor uses it only through the
 // injected `isAppLive` logic which we shadow by overriding inspectXxxRuntime.
