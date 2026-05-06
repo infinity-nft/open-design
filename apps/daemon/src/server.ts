@@ -2931,6 +2931,21 @@ export async function startServer({
       if (patch.metadata && typeof patch.metadata === 'object') {
         const existing = getProject(db, req.params.id);
         const existingMeta = existing?.metadata;
+        // devServer is privileged regardless of whether the project is
+        // imported. The auto-detector inside /api/import/folder is the
+        // only writer that's allowed to set it. Block all PATCH
+        // mutations of devServer (additions, changes, deletions). The
+        // existing config still survives because we re-stamp it below.
+        if ('devServer' in patch.metadata) {
+          const incoming = patch.metadata.devServer;
+          const current = existingMeta?.devServer ?? null;
+          if (JSON.stringify(incoming ?? null) !== JSON.stringify(current)) {
+            return sendApiError(
+              res, 400, 'BAD_REQUEST',
+              'devServer is immutable; managed only by the import endpoint',
+            );
+          }
+        }
         if (existingMeta?.baseDir) {
           if ('baseDir' in patch.metadata && patch.metadata.baseDir !== existingMeta.baseDir) {
             return sendApiError(
@@ -2952,11 +2967,6 @@ export async function startServer({
           return sendApiError(
             res, 400, 'BAD_REQUEST',
             'baseDir can only be set via POST /api/import/folder',
-          );
-        } else if ('devServer' in patch.metadata) {
-          return sendApiError(
-            res, 400, 'BAD_REQUEST',
-            'devServer is only set by the import endpoint after detection',
           );
         }
       }
