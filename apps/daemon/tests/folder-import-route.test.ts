@@ -143,6 +143,54 @@ describe('POST /api/import/folder', () => {
     ).toBe(true);
   });
 
+  // Defense against descendant-symlink escape: even after canonicalizing
+  // the import-time baseDir, a symlink *inside* the imported folder
+  // (e.g. assets -> /Users/me/.ssh) used to pass resolveSafe()'s string
+  // check because the literal path stayed under baseDir, but the OS
+  // followed the link at open() time and returned bytes from outside
+  // the project. resolveSafeReal() canonicalizes each read/write/delete,
+  // so any link reaching outside the project root is refused with a
+  // 4xx instead of an exfiltration channel.
+  // Defense against client-supplied baseDir on the generic create path:
+  // /api/import/folder owns the realpath() + RUNTIME_DATA_DIR reentry
+  // checks. POST /api/projects (and PATCH) must refuse a metadata.baseDir
+  // payload outright, otherwise an attacker bypasses the import-time
+  // sandbox guards.
+  it('rejects baseDir on the generic POST /api/projects', async () => {
+    const resp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: `tmp-${Date.now()}`,
+        name: 'sneaky',
+        metadata: { kind: 'prototype', baseDir: '/etc' },
+      }),
+    });
+    expect(resp.status).toBe(400);
+    const body = (await resp.json()) as { error?: { message?: string } };
+    expect(body.error?.message).toMatch(/baseDir.*import\/folder/i);
+  });
+
+  it('refuses raw reads through a descendant symlink that escapes the folder', async () => {
+    const real = makeFolder();
+    await mkdir(path.join(real, 'assets'));
+    // Point a symlink at /etc/hosts (always exists, harmless to read,
+    // but unambiguously outside the imported folder).
+    try {
+      symlinkSync('/etc/hosts', path.join(real, 'assets', 'leak.txt'));
+    } catch {
+      return;
+    }
+    const importResp = await importFolder({ baseDir: real });
+    expect(importResp.status).toBe(200);
+    const { project } = (await importResp.json()) as { project: { id: string } };
+
+    const raw = await fetch(
+      `${baseUrl}/api/projects/${project.id}/raw/assets/leak.txt`,
+    );
+    expect(raw.status).toBe(400);
+  });
+
   it('refuses a symlink that resolves into the daemon data directory', async () => {
     // Create a symlink that points into the test's RUNTIME_DATA_DIR (the
     // tmpdir-based path the daemon is using). Without realpath, this would

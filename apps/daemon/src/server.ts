@@ -1146,11 +1146,25 @@ const importUpload = multer({
 // folder (flat — same shape FileWorkspace expects), so the composer's
 // pasted/dropped/picked images become referenceable filenames the agent
 // can Read or @-mention without any cross-folder gymnastics.
+// Bridge between the multer upload-storage destination (built at module
+// init) and the per-process project DB (instantiated inside startServer).
+// startServer() sets this so the upload destination can route attachments
+// into the right project root, including folder-imported projects whose
+// files live under metadata.baseDir.
+let projectMetadataLookup: ((id: string) => Record<string, unknown> | null) | null = null;
+
 const projectUpload = multer({
   storage: multer.diskStorage({
     destination: async (req, _file, cb) => {
       try {
-        const dir = await ensureProject(PROJECTS_DIR, req.params.id);
+        // Route uploads into the project's actual root: for folder-imported
+        // projects (metadata.baseDir set) attachments need to land alongside
+        // the user's files so the agent can read them via the same path
+        // it sees. projectMetadataLookup is populated at startServer() boot
+        // and keyed by project id; null fallback gives the standard
+        // .od/projects/<id>/ behavior for non-imported projects.
+        const meta = projectMetadataLookup?.(req.params.id) ?? null;
+        const dir = await ensureProject(PROJECTS_DIR, req.params.id, meta);
         cb(null, dir);
       } catch (err) {
         cb(err, '');
@@ -1385,6 +1399,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     next();
   });
   const db = openDatabase(PROJECT_ROOT, { dataDir: RUNTIME_DATA_DIR });
+  // Wire the upload-destination bridge to this db so multer can route
+  // file uploads into baseDir-rooted projects' actual folders.
+  projectMetadataLookup = (id) => {
+    try { return getProject(db, id)?.metadata ?? null; } catch { return null; }
+  };
   configureConnectorCredentialStore(new FileConnectorCredentialStore(RUNTIME_DATA_DIR));
   configureComposioConfigStore(RUNTIME_DATA_DIR);
   let daemonUrl = `http://127.0.0.1:${port}`;
@@ -1638,6 +1657,22 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (typeof name !== 'string' || !name.trim()) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'name required');
       }
+      // baseDir is privileged: it lets a project root directly inside the
+      // user's filesystem. The /api/import/folder endpoint is the only
+      // path that's allowed to set it, because that's where realpath() +
+      // RUNTIME_DATA_DIR reentry checks live. Block client-supplied
+      // metadata.baseDir on this generic create endpoint so an attacker
+      // can't smuggle e.g. /etc through here. Same rule for
+      // originalBaseDir / importedFrom='folder' — only the import path
+      // owns those state fields.
+      if (metadata && typeof metadata === 'object') {
+        if ('baseDir' in metadata) {
+          return sendApiError(
+            res, 400, 'BAD_REQUEST',
+            'baseDir can only be set via POST /api/import/folder',
+          );
+        }
+      }
       const now = Date.now();
       const project = insertProject(db, {
         id,
@@ -1872,6 +1907,17 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   app.patch('/api/projects/:id', (req, res) => {
     try {
       const patch = req.body || {};
+      // Same rule as POST /api/projects: baseDir is privileged and can
+      // only be mutated through the import endpoint, not through a
+      // client-supplied metadata patch.
+      if (patch.metadata && typeof patch.metadata === 'object') {
+        if ('baseDir' in patch.metadata) {
+          return sendApiError(
+            res, 400, 'BAD_REQUEST',
+            'baseDir is immutable after import; use a new import to change it',
+          );
+        }
+      }
       if (patch.metadata?.linkedDirs) {
         const validated = validateLinkedDirs(patch.metadata.linkedDirs);
         if (validated.error) {
@@ -1925,9 +1971,10 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         activeProjectEventSinks.set(req.params.id, sinks);
       }
       sinks.add(projectEventSink);
+      const watchProject = getProject(db, req.params.id);
       sub = subscribeFileEvents(PROJECTS_DIR, req.params.id, (evt) => {
         sse.send('file-changed', evt);
-      });
+      }, { metadata: watchProject?.metadata });
       sub.ready.then(() => sse.send('ready', { projectId: req.params.id })).catch(() => {});
       const cleanup = () => {
         if (sub) {
@@ -2145,13 +2192,16 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (typeof sourceProjectId !== 'string') {
         return res.status(400).json({ error: 'sourceProjectId required' });
       }
-      if (!getProject(db, sourceProjectId)) {
+      const sourceProject = getProject(db, sourceProjectId);
+      if (!sourceProject) {
         return res.status(404).json({ error: 'source project not found' });
       }
       // Snapshot every HTML / sketch / text file in the source project.
       // We deliberately skip binary uploads — templates are about the
       // generated design, not the user's reference imagery.
-      const files = await listFiles(PROJECTS_DIR, sourceProjectId);
+      const files = await listFiles(PROJECTS_DIR, sourceProjectId, {
+        metadata: sourceProject.metadata,
+      });
       const snapshot = [];
       for (const f of files) {
         if (f.kind !== 'html' && f.kind !== 'text' && f.kind !== 'code')
@@ -2160,6 +2210,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
           PROJECTS_DIR,
           sourceProjectId,
           f.name,
+          sourceProject.metadata,
         );
         if (entry && Buffer.isBuffer(entry.buffer)) {
           snapshot.push({
@@ -3053,9 +3104,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       }
       const pattern = req.query.pattern ? String(req.query.pattern) : null;
       const max = Math.min(Number(req.query.max) || 200, 1000);
+      const searchProject = getProject(db, req.params.id);
       const matches = await searchProjectFiles(PROJECTS_DIR, req.params.id, query, {
         pattern,
         max,
+        metadata: searchProject?.metadata,
       });
       res.json({ query, matches });
     } catch (err) {
@@ -3071,12 +3124,13 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   app.get('/api/projects/:id/archive', async (req, res) => {
     try {
       const root = typeof req.query?.root === 'string' ? req.query.root : '';
+      const project = getProject(db, req.params.id);
       const { buffer, baseName } = await buildProjectArchive(
         PROJECTS_DIR,
         req.params.id,
         root,
+        project?.metadata,
       );
-      const project = getProject(db, req.params.id);
       const fallbackName = project?.name || req.params.id;
       const fileSlug = sanitizeArchiveFilename(baseName || fallbackName) || 'project';
       const filename = `${fileSlug}.zip`;
@@ -3112,12 +3166,13 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         sendApiError(res, 400, 'BAD_REQUEST', 'files must be a non-empty array');
         return;
       }
+      const project = getProject(db, req.params.id);
       const { buffer } = await buildBatchArchive(
         PROJECTS_DIR,
         req.params.id,
         files,
+        project?.metadata,
       );
-      const project = getProject(db, req.params.id);
       const fileSlug = sanitizeArchiveFilename(project?.name || req.params.id) || 'project';
       const filename = `${fileSlug}.zip`;
       const asciiFallback =
