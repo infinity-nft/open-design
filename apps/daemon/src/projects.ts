@@ -135,7 +135,13 @@ export async function buildProjectArchive(projectsRoot, projectId, root, metadat
   let archiveRoot = projectRoot;
   let archiveBaseName = '';
   if (typeof root === 'string' && root.trim().length > 0) {
-    archiveRoot = resolveSafe(projectRoot, root);
+    // Use the symlink-aware resolver so that an imported folder containing
+    // e.g. `docs -> /Users/me/.ssh` cannot exfiltrate via
+    // GET /api/projects/:id/archive?root=docs. resolveSafe()'s string
+    // prefix check would let the literal path stay under projectRoot, then
+    // collectArchiveEntries() / readFile() would follow the symlink at
+    // open() time and zip files outside the project tree.
+    archiveRoot = await resolveSafeReal(projectRoot, root);
     archiveBaseName = path.basename(archiveRoot);
   }
 

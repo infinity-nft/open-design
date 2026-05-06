@@ -1907,14 +1907,42 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   app.patch('/api/projects/:id', (req, res) => {
     try {
       const patch = req.body || {};
-      // Same rule as POST /api/projects: baseDir is privileged and can
-      // only be mutated through the import endpoint, not through a
-      // client-supplied metadata patch.
+      // baseDir / folder-import state is privileged: it's set only by the
+      // import endpoint and otherwise immutable. Two failure modes to
+      // guard against here:
+      //   1. Explicit attempt to change baseDir → reject with 400.
+      //   2. A regular metadata patch that *omits* baseDir (e.g. a UI
+      //      that only edits linkedDirs sends `{ metadata: { kind, linkedDirs } }`).
+      //      updateProject() replaces metadata wholesale, so without
+      //      preservation the existing baseDir gets wiped and the project
+      //      detaches from the user's folder — subsequent reads/writes
+      //      silently fall back to .od/projects/<id>.
+      // For case 2 we re-stamp the immutable fields from the existing
+      // project record onto the incoming patch so the user can keep
+      // patching other metadata without ever losing their import root.
       if (patch.metadata && typeof patch.metadata === 'object') {
-        if ('baseDir' in patch.metadata) {
+        const existing = getProject(db, req.params.id);
+        const existingMeta = existing?.metadata;
+        if (existingMeta?.baseDir) {
+          if ('baseDir' in patch.metadata && patch.metadata.baseDir !== existingMeta.baseDir) {
+            return sendApiError(
+              res, 400, 'BAD_REQUEST',
+              'baseDir is immutable after import; use a new import to change it',
+            );
+          }
+          patch.metadata = {
+            ...patch.metadata,
+            baseDir: existingMeta.baseDir,
+            ...(existingMeta.importedFrom === 'folder'
+              ? { importedFrom: 'folder' }
+              : {}),
+          };
+        } else if ('baseDir' in patch.metadata) {
+          // Non-imported project trying to acquire a baseDir → reject (only
+          // /api/import/folder can set it).
           return sendApiError(
             res, 400, 'BAD_REQUEST',
-            'baseDir is immutable after import; use a new import to change it',
+            'baseDir can only be set via POST /api/import/folder',
           );
         }
       }

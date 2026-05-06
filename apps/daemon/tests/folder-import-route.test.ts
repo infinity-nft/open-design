@@ -171,6 +171,57 @@ describe('POST /api/import/folder', () => {
     expect(body.error?.message).toMatch(/baseDir.*import\/folder/i);
   });
 
+  // Same defense extended to the archive endpoint. resolveSafe() at the
+  // archive root only did string-prefix validation; a directory symlink
+  // like `docs -> /Users/me/.ssh` would pass and collectArchiveEntries()
+  // would zip files outside the imported folder. resolveSafeReal() now
+  // canonicalizes the archive root before walking it.
+  it('refuses archive root that resolves outside the imported folder', async () => {
+    const real = makeFolder();
+    await writeFile(path.join(real, 'index.html'), '<!doctype html>');
+    try {
+      symlinkSync('/etc', path.join(real, 'docs'));
+    } catch {
+      return;
+    }
+    const importResp = await importFolder({ baseDir: real });
+    const { project } = (await importResp.json()) as { project: { id: string } };
+    const archive = await fetch(
+      `${baseUrl}/api/projects/${project.id}/archive?root=docs`,
+    );
+    expect(archive.status).toBe(400);
+  });
+
+  // Regression for the patch-metadata wipe. updateProject() replaces
+  // metadata wholesale, so a normal UI patch that omits baseDir would
+  // silently detach the project from its imported folder. Verify the
+  // route preserves baseDir even when the incoming patch doesn't
+  // mention it.
+  it('preserves metadata.baseDir when PATCH omits it', async () => {
+    const real = makeFolder();
+    await writeFile(path.join(real, 'index.html'), '');
+    const importResp = await importFolder({ baseDir: real });
+    const { project } = (await importResp.json()) as {
+      project: { id: string; metadata: { baseDir: string } };
+    };
+    const originalBaseDir = project.metadata.baseDir;
+    expect(originalBaseDir).toBeTruthy();
+
+    // Patch unrelated metadata field. baseDir is not mentioned.
+    const patchResp = await fetch(`${baseUrl}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        metadata: { kind: 'prototype', linkedDirs: [] },
+      }),
+    });
+    expect(patchResp.status).toBe(200);
+    const after = (await patchResp.json()) as {
+      project: { metadata: { baseDir?: string } };
+    };
+    expect(after.project.metadata.baseDir).toBe(originalBaseDir);
+  });
+
   it('refuses raw reads through a descendant symlink that escapes the folder', async () => {
     const real = makeFolder();
     await mkdir(path.join(real, 'assets'));
