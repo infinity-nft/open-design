@@ -1005,17 +1005,33 @@ async function detectDevServer(rootDir: string): Promise<{ script: string; cwd: 
   return null;
 }
 
-// Poll until the dev server responds on its port or timeout.
-async function freePort(port: number): Promise<void> {
-  // Kill processes LISTENING on the port (e.g. an orphaned dev server from a
-  // previous daemon run). -sTCP:LISTEN is critical: it excludes clients that
-  // have outgoing connections to the port (e.g. an IDE preview), which would
-  // otherwise be killed too.
+// Free a port — but only kill processes we (the daemon) own. Previous
+// implementation called `lsof | xargs kill` unconditionally, which would
+// happily kill anything listening on the port (legitimate dev servers,
+// the user's other tools, even sshd if a malicious metadata patch set
+// devServer.port=22). Now we cross-reference the lsof output with our
+// own devServers registry and only kill PIDs we spawned ourselves.
+async function freePort(
+  port: number,
+  ownedRegistry: Map<string, { child: { pid?: number } }>,
+): Promise<void> {
   if (process.platform === 'win32') return;
   try {
     const { execSync } = await import('node:child_process');
-    execSync(`lsof -ti :${port} -sTCP:LISTEN | xargs kill -9 2>/dev/null || true`, { stdio: 'ignore' });
-    await new Promise(r => setTimeout(r, 400));
+    const out = execSync(`lsof -ti :${port} -sTCP:LISTEN 2>/dev/null || true`, { encoding: 'utf8' });
+    const pids = out.split('\n').map((l) => l.trim()).filter(Boolean).map(Number);
+    const ownPids = new Set<number>();
+    for (const entry of ownedRegistry.values()) {
+      const pid = entry.child.pid;
+      if (typeof pid === 'number') ownPids.add(pid);
+    }
+    for (const pid of pids) {
+      if (!ownPids.has(pid)) continue;
+      try { process.kill(pid, 'SIGKILL'); } catch { /* race / already gone */ }
+    }
+    if (pids.some((p) => ownPids.has(p))) {
+      await new Promise(r => setTimeout(r, 400));
+    }
   } catch { /* ignore */ }
 }
 
@@ -2482,6 +2498,12 @@ export async function startServer({
             'baseDir can only be set via POST /api/import/folder',
           );
         }
+        if ('devServer' in metadata) {
+          return sendApiError(
+            res, 400, 'BAD_REQUEST',
+            'devServer is only set by the import endpoint after detection',
+          );
+        }
       }
       const now = Date.now();
       const project = insertProject(db, {
@@ -2721,6 +2743,34 @@ export async function startServer({
     }
   });
 
+  // Allowlist of dev-server commands. Anything outside this set is refused
+  // — the script field is metadata that survives across PATCH replays and
+  // an unconstrained spawn would be RCE-equivalent for any caller who can
+  // patch project metadata.
+  const DEV_SERVER_CMD_ALLOWLIST = new Set(['npm', 'pnpm', 'yarn', 'bun', 'npx', 'pnpx']);
+  // Privileged ports + commonly hijacked services. Forbidden for dev
+  // servers since freePort() below would happily kill the legitimate
+  // process holding the port.
+  const DEV_SERVER_PORT_FORBIDDEN = new Set([22, 25, 53, 80, 443, 465, 587, 3306, 5432, 6379, 8080, 27017]);
+
+  function validateDevServerScript(script: string): { ok: boolean; cmd?: string; args?: string[]; reason?: string } {
+    if (typeof script !== 'string' || !script.trim()) {
+      return { ok: false, reason: 'devServer.script must be a non-empty string' };
+    }
+    const parts = script.trim().split(/\s+/);
+    const cmd = parts[0];
+    if (!cmd || !DEV_SERVER_CMD_ALLOWLIST.has(cmd)) {
+      return { ok: false, reason: `devServer.script command must be one of: ${[...DEV_SERVER_CMD_ALLOWLIST].join(', ')}` };
+    }
+    // Enforce the standard "<pm> run <script-key>" or "<pm> exec <bin>"
+    // shape — reject command chaining (&&, ;, |), redirects, and shell
+    // metacharacters even though spawn() runs without a shell.
+    if (/[;&|`$<>]/.test(script)) {
+      return { ok: false, reason: 'devServer.script must not contain shell metacharacters' };
+    }
+    return { ok: true, cmd, args: parts.slice(1) };
+  }
+
   app.post('/api/projects/:id/dev-server/start', async (req, res) => {
     try {
       const project = getProject(db, req.params.id);
@@ -2734,32 +2784,71 @@ export async function startServer({
         return res.json({ url: existing.url, port: existing.port, pid: existing.child.pid });
       }
 
-      // Compute absolute cwd
+      // Validate script — only npm/pnpm/yarn/bun-family commands, no shell
+      // metacharacters. ds.script lives in metadata and was originally set
+      // by /api/import/folder's auto-detection, but PATCH could in
+      // principle replace it (defended elsewhere) — re-validate at spawn
+      // time to be safe.
+      const validated = validateDevServerScript(ds.script);
+      if (!validated.ok) {
+        return sendApiError(res, 400, 'BAD_REQUEST', validated.reason ?? 'invalid script');
+      }
+
+      // Validate port. Reject privileged + commonly hijacked services so
+      // freePort() can't be weaponized into killing legitimate processes.
+      const port = Number(ds.port);
+      if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'devServer.port must be an integer in [1024, 65535]');
+      }
+      if (DEV_SERVER_PORT_FORBIDDEN.has(port)) {
+        return sendApiError(res, 400, 'BAD_REQUEST', `port ${port} is reserved`);
+      }
+
+      // Resolve cwd through realpath and verify it's still inside the
+      // canonical folderPath. Without this, ds.cwd = "../../etc" would
+      // make the spawn run with cwd outside the imported folder.
       const folderPath = project.metadata?.folderPath ?? project.metadata?.originalFolderPath;
       if (typeof folderPath !== 'string') return sendApiError(res, 400, 'BAD_REQUEST', 'project has no folder path');
-      const cwd = ds.cwd ? path.join(folderPath, ds.cwd) : folderPath;
+      let canonicalFolder: string;
+      try {
+        canonicalFolder = await fs.promises.realpath(folderPath);
+      } catch {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'folder no longer exists on disk');
+      }
+      const cwdInput = ds.cwd ? path.join(canonicalFolder, ds.cwd) : canonicalFolder;
+      let cwd: string;
+      try {
+        cwd = await fs.promises.realpath(cwdInput);
+      } catch {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'devServer.cwd does not exist');
+      }
+      if (cwd !== canonicalFolder && !cwd.startsWith(canonicalFolder + path.sep)) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'devServer.cwd escapes folderPath');
+      }
 
-      // Free the port if an orphaned dev server from a previous run is holding
-      // it — otherwise spawn fails with EADDRINUSE and the child dies silently.
-      await freePort(ds.port);
+      // Free the port if WE hold it from a previous run. We refuse to
+      // kill processes we don't own — devServers map only contains PIDs
+      // we spawned, freePort checks against that registry now.
+      await freePort(port, devServers);
 
-      // Parse script into command + args
-      const parts = ds.script.split(/\s+/);
-      const cmd = parts[0];
-      const args = parts.slice(1);
-      const child = spawn(cmd, args, { cwd, stdio: 'ignore', detached: false, shell: false });
-      const url = `http://localhost:${ds.port}`;
-      devServers.set(project.id, { child, url, port: ds.port });
+      const child = spawn(validated.cmd!, validated.args!, {
+        cwd,
+        stdio: 'ignore',
+        detached: false,
+        shell: false,
+      });
+      const url = `http://localhost:${port}`;
+      devServers.set(project.id, { child, url, port });
 
       child.on('close', () => devServers.delete(project.id));
 
-      const ready = await waitForDevServer(ds.port);
+      const ready = await waitForDevServer(port);
       if (!ready) {
         child.kill();
         devServers.delete(project.id);
         return sendApiError(res, 500, 'INTERNAL_ERROR', 'dev server did not start in time');
       }
-      res.json({ url, port: ds.port, pid: child.pid });
+      res.json({ url, port, pid: child.pid });
     } catch (err) {
       sendApiError(res, 500, 'INTERNAL_ERROR', String(err));
     }
@@ -2855,6 +2944,7 @@ export async function startServer({
             ...(existingMeta.importedFrom === 'folder'
               ? { importedFrom: 'folder' }
               : {}),
+            ...(existingMeta.devServer ? { devServer: existingMeta.devServer } : {}),
           };
         } else if ('baseDir' in patch.metadata) {
           // Non-imported project trying to acquire a baseDir → reject (only
@@ -2862,6 +2952,11 @@ export async function startServer({
           return sendApiError(
             res, 400, 'BAD_REQUEST',
             'baseDir can only be set via POST /api/import/folder',
+          );
+        } else if ('devServer' in patch.metadata) {
+          return sendApiError(
+            res, 400, 'BAD_REQUEST',
+            'devServer is only set by the import endpoint after detection',
           );
         }
       }
