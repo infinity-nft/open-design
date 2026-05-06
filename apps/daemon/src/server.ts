@@ -2894,10 +2894,12 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       }
 
       const prior = getDeployment(db, req.params.id, fileName, providerId);
+      const deployProject = getProject(db, req.params.id);
       const files = await buildDeployFileSet(
         PROJECTS_DIR,
         req.params.id,
         fileName,
+        { metadata: deployProject?.metadata },
       );
       const result = await deployToVercel({
         config: await readVercelConfig(),
@@ -2952,11 +2954,13 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (typeof fileName !== 'string' || !fileName.trim()) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'fileName required');
       }
+      const preflightProject = getProject(db, req.params.id);
       /** @type {import('@open-design/contracts').DeployPreflightResponse} */
       const body = await prepareDeployPreflight(
         PROJECTS_DIR,
         req.params.id,
         fileName,
+        { metadata: preflightProject?.metadata },
       );
       res.json(body);
     } catch (err) {
@@ -3760,7 +3764,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         const chatMeta = chatProject?.metadata;
         if (chatMeta?.baseDir) {
           cwd = path.normalize(chatMeta.baseDir);
-          existingProjectFiles = await listFiles(PROJECTS_DIR, projectId, chatMeta);
+          existingProjectFiles = await listFiles(PROJECTS_DIR, projectId, { metadata: chatMeta });
         } else {
           cwd = await ensureProject(PROJECTS_DIR, projectId);
           existingProjectFiles = await listFiles(PROJECTS_DIR, projectId);
