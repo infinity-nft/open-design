@@ -342,9 +342,26 @@ async function loadSkillGoldens(skillDir: string, max: number): Promise<SkillGol
       // Truncate artifact at a clean tag boundary so the injected HTML stays
       // parseable even when cut short.
       const artifact = truncateHtmlClean(artifactRaw.trim(), GOLDEN_ARTIFACT_MAX_CHARS);
-      if (prompt && artifact) out.push({ slug, prompt, artifact });
-    } catch {
+      if (prompt && artifact) {
+        out.push({ slug, prompt, artifact });
+      } else if (process.env.NODE_ENV === "development") {
+        // Author wrote files but one was empty after trim; surface so the
+        // bug isn't silent. Only in dev — production keeps a quiet no-op
+        // since malformed goldens shouldn't take a skill out of the picker.
+        console.warn(
+          `[skills] golden '${slug}' in ${path.relative(skillDir, goldensDir)} skipped — prompt or artifact empty after trim`,
+        );
+      }
+    } catch (err) {
       // Missing file in one golden → skip that golden, keep others.
+      // Log in dev so the skill author notices the bug instead of
+      // wondering why their few-shot examples don't show up.
+      if (process.env.NODE_ENV === "development") {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[skills] golden '${slug}' in ${path.relative(skillDir, goldensDir)} failed to load: ${msg}`,
+        );
+      }
     }
   }
   return out;
