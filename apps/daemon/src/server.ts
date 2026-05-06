@@ -1006,7 +1006,20 @@ async function detectDevServer(rootDir: string): Promise<{ script: string; cwd: 
 }
 
 // Poll until the dev server responds on its port or timeout.
-async function waitForDevServer(port: number, timeoutMs = 30_000): Promise<boolean> {
+async function freePort(port: number): Promise<void> {
+  // Kill processes LISTENING on the port (e.g. an orphaned dev server from a
+  // previous daemon run). -sTCP:LISTEN is critical: it excludes clients that
+  // have outgoing connections to the port (e.g. an IDE preview), which would
+  // otherwise be killed too.
+  if (process.platform === 'win32') return;
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync(`lsof -ti :${port} -sTCP:LISTEN | xargs kill -9 2>/dev/null || true`, { stdio: 'ignore' });
+    await new Promise(r => setTimeout(r, 400));
+  } catch { /* ignore */ }
+}
+
+async function waitForDevServer(port: number, timeoutMs = 90_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -1979,6 +1992,12 @@ export async function startServer({
   composioConnectorProvider.startCatalogRefreshLoop();
   let daemonUrl = `http://127.0.0.1:${port}`;
 
+  // Wire the upload destination (defined at module scope) to this db so it can
+  // route files into a git-linked folder when the project has folderPath set.
+  projectMetadataLookup = (id: string) => {
+    try { return getProject(db, id)?.metadata ?? null; } catch { return null; }
+  };
+
   // Boot reconcile: any critique_runs row left in 'running' state by a prior
   // daemon crash gets flipped to 'interrupted' with rounds_json.recoveryReason
   // = 'daemon_restart' so the spec's daemon-restart-mid-run failure mode is
@@ -2720,6 +2739,10 @@ export async function startServer({
       if (typeof folderPath !== 'string') return sendApiError(res, 400, 'BAD_REQUEST', 'project has no folder path');
       const cwd = ds.cwd ? path.join(folderPath, ds.cwd) : folderPath;
 
+      // Free the port if an orphaned dev server from a previous run is holding
+      // it — otherwise spawn fails with EADDRINUSE and the child dies silently.
+      await freePort(ds.port);
+
       // Parse script into command + args
       const parts = ds.script.split(/\s+/);
       const cmd = parts[0];
@@ -2748,6 +2771,47 @@ export async function startServer({
     entry.child.kill();
     devServers.delete(req.params.id);
     res.json({ ok: true });
+  });
+
+  // Proxy dev-server HTML through the daemon so the iframe is same-origin with
+  // the parent page — this lets the injected scroll bridge receive postMessage
+  // from the parent and scroll the app's content.
+  app.get('/api/projects/:id/dev-html', async (req, res) => {
+    // Resolve the port from the in-memory map if we own the process, otherwise
+    // fall back to the project's configured port (handles orphaned dev servers
+    // that survived a daemon restart — still proxy them rather than 503).
+    let port: number | null = null;
+    const entry = devServers.get(req.params.id);
+    if (entry) {
+      port = entry.port;
+    } else {
+      const project = getProject(db, req.params.id);
+      const ds = project?.metadata?.devServer;
+      if (ds?.port) port = ds.port;
+    }
+    if (port == null) return res.status(503).json({ error: 'dev server not running' });
+    const subPath = typeof req.query.path === 'string' ? req.query.path : '/';
+    try {
+      const upstream = await fetch(`http://localhost:${port}${subPath}`);
+      let html = await upstream.text();
+      const base = `<base href="http://localhost:${port}/">`;
+      if (/<head[^>]*>/i.test(html)) {
+        html = html.replace(/(<head[^>]*>)/i, `$1${base}`);
+      } else if (!html.includes('<base ')) {
+        html = base + html;
+      }
+      const bridge = `<script data-od-bridge>(function(){window.addEventListener('message',function(ev){if(!ev.data||ev.data.type!=='od:scroll')return;var x=+(ev.data.x||0),y=+(ev.data.y||0);window.scrollBy(x,y);var px=ev.data.px!=null?+ev.data.px:window.innerWidth/2;var py=ev.data.py!=null?+ev.data.py:window.innerHeight/2;var el=document.elementFromPoint(px,py);while(el&&el!==document.documentElement){if(el.scrollHeight>el.clientHeight+2){el.scrollTop+=y;el.scrollLeft+=x;return;}el=el.parentElement;}});})();</script>`;
+      if (/<\/body>/i.test(html)) {
+        html = html.replace(/<\/body>/i, bridge + '</body>');
+      } else {
+        html += bridge;
+      }
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(html);
+    } catch (err) {
+      res.status(502).json({ error: `dev server unreachable: ${String(err)}` });
+    }
   });
 
   app.get('/api/projects/:id', (req, res) => {
