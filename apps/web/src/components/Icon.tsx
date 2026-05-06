@@ -49,7 +49,13 @@ type IconName =
   | 'tweaks'
   | 'upload'
   | 'zoom-in'
-  | 'zoom-out';
+  | 'zoom-out'
+  | 'hand'
+  | 'text-tool'
+  | 'rectangle'
+  | 'arrow-tool'
+  | 'eraser'
+  | 'pointer';
 
 interface Props extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   name: IconName;
@@ -464,6 +470,55 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
           <circle cx="11" cy="11" r="7" />
           <path d="M8 11h6" />
           <path d="m21 21-4.3-4.3" />
+        </svg>
+      );
+    case 'hand':
+      return (
+        <svg {...common}>
+          <path d="M5 11V6a2 2 0 0 1 4 0v6" />
+          <path d="M9 11V4a2 2 0 0 1 4 0v8" />
+          <path d="M13 11V5a2 2 0 0 1 4 0v9" />
+          <path d="M17 11V8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2 0-4-1-5-3l-3-7" />
+        </svg>
+      );
+    case 'text-tool':
+      return (
+        <svg {...common}>
+          <path d="M4 7V5h16v2" />
+          <path d="M12 5v14" />
+          <path d="M9 19h6" />
+        </svg>
+      );
+    case 'rectangle':
+      return (
+        <svg {...common}>
+          <rect x="3" y="6" width="18" height="12" rx="1.5" />
+        </svg>
+      );
+    case 'arrow-tool':
+      return (
+        <svg {...common}>
+          <path d="M6 18 18 6" />
+          <path d="M9 6h9v9" />
+        </svg>
+      );
+    case 'eraser':
+      return (
+        <svg {...common}>
+          {/* Classic eraser: rounded rectangle tilted 45°, with a divider
+              line two-thirds down to suggest the rubber/ferrule split. */}
+          <path d="m20 12-8 8H6l-3-3 11-11 6 6Z" />
+          <path d="m9 9 6 6" />
+        </svg>
+      );
+    case 'pointer':
+      return (
+        <svg {...common}>
+          {/* Pointing finger — index finger up, thumb tucked. Used for
+              the Interact toggle to signal "tap / interact with the app". */}
+          <path d="M9 11V5a2 2 0 0 1 4 0v6" />
+          <path d="M13 11V8a2 2 0 0 1 4 0v3" />
+          <path d="M17 11v-1a2 2 0 0 1 4 0v6a6 6 0 0 1-6 6h-2c-2 0-4-1-5-3l-3-5a2 2 0 0 1 3-3l1 1V7a2 2 0 0 1 4 0v4" />
         </svg>
       );
     default:

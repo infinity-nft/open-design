@@ -3875,9 +3875,60 @@ code {
   flex-shrink: 0;
 }
 .dev-server-dot.running { background: #22c55e; }
+.dev-server-dot.stopped { background: #6b7280; }
 .dev-server-dot.starting {
   background: #f59e0b;
   animation: dev-dot-pulse 1.2s ease-in-out infinite;
+}
+
+/* Stopped-state shell wrapping a thin banner + the standard FileWorkspace.
+   Banner sits above the file panel so the user keeps their files visible
+   and gets a single Start affordance. */
+.dev-server-stopped-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.dev-server-stopped-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.dev-server-stopped-banner-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+.dev-server-stopped-banner-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.dev-server-stopped-banner-action:hover {
+  background: var(--bg);
+  border-color: var(--border-strong);
+}
+
+/* The zoom-percentage variant of sketch-tool — wider, monospace digits */
+.sketch-tool--zoom {
+  min-width: 44px;
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
 }
 @keyframes dev-dot-pulse {
   0%, 100% { opacity: 1; }
@@ -9017,6 +9068,22 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
 .sketch-tool:hover { background: var(--bg-subtle); }
 .sketch-tool.active { background: var(--accent); color: white; border-color: var(--accent); }
 .sketch-divider { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+/* Quick-pick color swatches — Figma-style 5-preset row.
+   Active swatch gets an outline ring so the current pick is obvious. */
+.sketch-presets { display: inline-flex; gap: 4px; align-items: center; }
+.sketch-preset {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.12);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.08s, box-shadow 0.08s;
+}
+.sketch-preset:hover { transform: scale(1.12); }
+.sketch-preset.active {
+  box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px var(--accent);
+}
 .sketch-color { width: 32px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
 .sketch-size { width: 80px; background: transparent; border: none; }
 .sketch-spacer { flex: 1; }

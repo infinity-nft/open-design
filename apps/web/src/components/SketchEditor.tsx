@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useT } from '../i18n';
+import { Icon } from './Icon';
 
 export type Tool = 'select' | 'pen' | 'text' | 'rect' | 'arrow' | 'eraser' | 'hand';
 
@@ -8,6 +9,11 @@ interface Stroke {
   points: Array<{ x: number; y: number }>;
   color: string;
   size: number;
+  // When true, the stroke removes pixels from the canvas instead of
+  // adding them. Used by the eraser tool. The renderer flips
+  // globalCompositeOperation to 'destination-out' before drawing the
+  // path so the underlying preview iframe (overlay mode) shows through.
+  erase?: boolean;
 }
 interface RectShape {
   kind: 'rect';
@@ -61,6 +67,13 @@ interface Props {
   canvasRef?: React.MutableRefObject<HTMLCanvasElement | null>;
   // Called when the hand tool drags or scrolls — parent decides what to scroll.
   onHandPan?: (dx: number, dy: number) => void;
+  // Slot for parent-supplied controls rendered inside the toolbar (between
+  // the drawing tools and the undo/clear/save block). Used by ProjectView
+  // to host the zoom controls in the same toolbar.
+  toolbarExtras?: React.ReactNode;
+  // Slot rendered immediately after the hand tool — for navigation-y
+  // toggles like Interact that sit visually next to "move/pan".
+  toolbarLeft?: React.ReactNode;
 }
 
 export function SketchEditor({
@@ -74,13 +87,15 @@ export function SketchEditor({
   overlay = false,
   canvasRef: externalCanvasRef,
   onHandPan,
+  toolbarExtras,
+  toolbarLeft,
 }: Props) {
   const t = useT();
   const internalCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasRef = externalCanvasRef ?? internalCanvasRef;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [tool, setTool] = useState<Tool>('pen');
-  const [color, setColor] = useState('#1c1b1a');
+  const [color, setColor] = useState('#ef4444');
   const [size, setSize] = useState(2);
   const drawingRef = useRef<SketchItem | null>(null);
   const handDragging = useRef(false);
@@ -92,6 +107,15 @@ export function SketchEditor({
   const [textModalOpen, setTextModalOpen] = useState(false);
   const [textModalValue, setTextModalValue] = useState('');
   const textAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  // Future stack for redo. Cleared on any non-undo mutation. Mirrors the
+  // industry pattern (Figma / Excalidraw): undo pushes to future, redo
+  // pops from future, drawing/erasing wipes future.
+  const [redoStack, setRedoStack] = useState<SketchItem[]>([]);
+
+  // Industry-standard color presets — 5 strong colors for quick selection.
+  // Same set Figma / Excalidraw use for annotation: red is default, plus
+  // blue/green/yellow for variety, plus black for outlines.
+  const PRESETS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#0f172a'];
 
   // Resize canvas to its container while keeping a high DPR for crisp lines.
   useEffect(() => {
@@ -161,8 +185,9 @@ export function SketchEditor({
       drawingRef.current = {
         kind: 'pen',
         points: [pos],
-        color: tool === 'eraser' ? '#fafaf9' : color,
+        color,
         size: tool === 'eraser' ? size * 6 : size,
+        erase: tool === 'eraser',
       };
     } else if (tool === 'rect') {
       drawingRef.current = { kind: 'rect', x: pos.x, y: pos.y, w: 0, h: 0, color, size };
@@ -211,12 +236,24 @@ export function SketchEditor({
     drawingRef.current = null;
     if (!cur) return;
     onItemsChange([...items, cur]);
+    setRedoStack([]); // any new draw invalidates the redo branch
   }
 
   function handleUndo() {
+    if (items.length === 0) return;
+    const last = items[items.length - 1];
+    if (last) setRedoStack((s) => [...s, last]);
     onItemsChange(items.slice(0, -1));
   }
+  function handleRedo() {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    if (!next) return;
+    setRedoStack((s) => s.slice(0, -1));
+    onItemsChange([...items, next]);
+  }
   function handleClear() {
+    if (items.length > 0) setRedoStack(items.slice().reverse());
     onItemsChange([]);
   }
 
@@ -242,17 +279,66 @@ export function SketchEditor({
     textAnchorRef.current = null;
   }
 
+  // Tool & history keyboard shortcuts. Match the Figma / Excalidraw
+  // convention: H hand, V/P pen, T text, R rect, A arrow, E eraser,
+  // ⌘Z undo, ⌘⇧Z redo. Skip when the user is typing in an input
+  // (color picker, range, future text fields) so we never steal keys.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          target.isContentEditable
+        ) return;
+      }
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo(); else handleUndo();
+        return;
+      }
+      if (meta) return;
+      const k = e.key.toLowerCase();
+      if (k === 'h') setTool('hand');
+      else if (k === 'p' || k === 'v') setTool('pen');
+      else if (k === 't') setTool('text');
+      else if (k === 'r') setTool('rect');
+      else if (k === 'a') setTool('arrow');
+      else if (k === 'e') setTool('eraser');
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, redoStack]);
+
   return (
     <div className={`sketch-editor${overlay ? ' sketch-overlay' : ''}`} data-tool={tool}>
       <div className="sketch-toolbar">
-        <ToolBtn cur={tool} v="hand" onClick={setTool} title="Hand (scroll)" label="✥" />
+        <ToolBtn cur={tool} v="hand" onClick={setTool} title="Hand" shortcut="H" icon="hand" />
+        {toolbarLeft}
         <span className="sketch-divider" />
-        <ToolBtn cur={tool} v="pen" onClick={setTool} title={t('sketch.toolPen')} label="✎" />
-        <ToolBtn cur={tool} v="text" onClick={setTool} title={t('sketch.toolText')} label="T" />
-        <ToolBtn cur={tool} v="rect" onClick={setTool} title={t('sketch.toolRect')} label="▭" />
-        <ToolBtn cur={tool} v="arrow" onClick={setTool} title={t('sketch.toolArrow')} label="↗" />
-        <ToolBtn cur={tool} v="eraser" onClick={setTool} title={t('sketch.toolEraser')} label="◌" />
+        <ToolBtn cur={tool} v="pen" onClick={setTool} title={t('sketch.toolPen')} shortcut="P" icon="pencil" />
+        <ToolBtn cur={tool} v="text" onClick={setTool} title={t('sketch.toolText')} shortcut="T" icon="text-tool" />
+        <ToolBtn cur={tool} v="rect" onClick={setTool} title={t('sketch.toolRect')} shortcut="R" icon="rectangle" />
+        <ToolBtn cur={tool} v="arrow" onClick={setTool} title={t('sketch.toolArrow')} shortcut="A" icon="arrow-tool" />
+        <ToolBtn cur={tool} v="eraser" onClick={setTool} title={t('sketch.toolEraser')} shortcut="E" icon="eraser" />
         <span className="sketch-divider" />
+        <div className="sketch-presets" role="group" aria-label="Color presets">
+          {PRESETS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`sketch-preset${color.toLowerCase() === c.toLowerCase() ? ' active' : ''}`}
+              style={{ background: c }}
+              onClick={() => setColor(c)}
+              title={c}
+              aria-label={`Color ${c}`}
+            />
+          ))}
+        </div>
         <input
           type="color"
           className="sketch-color"
@@ -269,12 +355,45 @@ export function SketchEditor({
           title={t('sketch.strokeSize')}
           className="sketch-size"
         />
+        {toolbarExtras ? (
+          <>
+            <span className="sketch-divider" />
+            {toolbarExtras}
+          </>
+        ) : null}
         <span className="sketch-divider" />
-        <button className="ghost" onClick={handleUndo} disabled={items.length === 0}>
-          {t('sketch.undo')}
+        <button
+          type="button"
+          className="sketch-tool"
+          onClick={handleUndo}
+          disabled={items.length === 0}
+          title="Undo (⌘Z)"
+          aria-label="Undo"
+        >
+          <Icon name="arrow-left" size={14} />
         </button>
-        <button className="ghost" onClick={handleClear} disabled={items.length === 0}>
-          {t('sketch.clear')}
+        <button
+          type="button"
+          className="sketch-tool"
+          onClick={handleRedo}
+          disabled={redoStack.length === 0}
+          title="Redo (⌘⇧Z)"
+          aria-label="Redo"
+        >
+          {/* Mirror of arrow-left to read as "redo" without adding a new icon. */}
+          <span style={{ display: 'inline-flex', transform: 'scaleX(-1)' }}>
+            <Icon name="arrow-left" size={14} />
+          </span>
+        </button>
+        <button
+          type="button"
+          className="sketch-tool"
+          onClick={handleClear}
+          disabled={items.length === 0}
+          title="Clear all"
+          aria-label="Clear all"
+        >
+          <Icon name="close" size={14} />
         </button>
         <span className="sketch-spacer" />
         <span className="sketch-name" title={fileName}>
@@ -359,22 +478,27 @@ function ToolBtn({
   cur,
   v,
   onClick,
-  label,
+  icon,
   title,
+  shortcut,
 }: {
   cur: Tool;
   v: Tool;
   onClick: (v: Tool) => void;
-  label: string;
+  icon: React.ComponentProps<typeof Icon>['name'];
   title: string;
+  shortcut?: string;
 }) {
+  const fullTitle = shortcut ? `${title} (${shortcut})` : title;
   return (
     <button
       className={`sketch-tool ${cur === v ? 'active' : ''}`}
       onClick={() => onClick(v)}
-      title={title}
+      title={fullTitle}
+      aria-label={fullTitle}
+      aria-keyshortcuts={shortcut?.toLowerCase()}
     >
-      {label}
+      <Icon name={icon} size={14} />
     </button>
   );
 }
@@ -399,6 +523,9 @@ function drawItem(ctx: CanvasRenderingContext2D, it: SketchItem) {
   ctx.lineWidth = it.size;
   if (it.kind === 'pen') {
     if (it.points.length < 2) return ctx.restore();
+    if (it.erase) {
+      ctx.globalCompositeOperation = 'destination-out';
+    }
     ctx.beginPath();
     ctx.moveTo(it.points[0]!.x, it.points[0]!.y);
     for (let i = 1; i < it.points.length; i++) {

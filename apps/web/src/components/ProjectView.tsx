@@ -475,6 +475,17 @@ export function ProjectView({
   }, [streaming, messages, config.notifications, t]);
 
   // Auto-start dev server for folder-imported projects that have a devServer config.
+  // Start the dev server for the current project. Used both by the auto-
+  // start effect on mount and by the user-facing Start button after Stop.
+  const handleStartDevServer = useCallback(() => {
+    if (!project.metadata?.devServer) return;
+    setDevServerStarting(true);
+    void startDevServer(project.id).then((result) => {
+      setDevServerStarting(false);
+      if (result?.url) setDevServerUrl(result.url);
+    });
+  }, [project.id, project.metadata?.devServer]);
+
   useEffect(() => {
     if (!project.metadata?.devServer) return;
     let cancelled = false;
@@ -1944,6 +1955,42 @@ export function ProjectView({
           />
         ) : devServerStarting ? (
           <DevServerViewer url={null} projectName={project.name} onStop={null} onSendToChat={null} />
+        ) : project.metadata?.devServer ? (
+          <div className="dev-server-stopped-wrap">
+            <div className="dev-server-stopped-banner">
+              <span className="dev-server-stopped-banner-status">
+                <span className="dev-server-dot stopped" aria-hidden />
+                Dev server stopped
+              </span>
+              <button
+                type="button"
+                className="dev-server-stopped-banner-action"
+                onClick={handleStartDevServer}
+              >
+                <Icon name="play" size={13} />
+                Start
+              </button>
+            </div>
+            <FileWorkspace
+              projectId={project.id}
+              files={projectFiles}
+              liveArtifacts={liveArtifacts}
+              onRefreshFiles={() => {
+                void refreshWorkspaceItems();
+              }}
+              isDeck={isDeck}
+              onExportAsPptx={handleExportAsPptx}
+              streaming={streaming}
+              openRequest={openRequest}
+              liveArtifactEvents={liveArtifactEvents}
+              tabsState={openTabsState}
+              onTabsStateChange={persistTabsState}
+              previewComments={previewComments}
+              onSavePreviewComment={savePreviewComment}
+              onRemovePreviewComment={removePreviewComment}
+              onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
+            />
+          </div>
         ) : (
           <FileWorkspace
             projectId={project.id}
@@ -2005,14 +2052,9 @@ function DevServerViewer({
   const [drawItems, setDrawItems] = useState<SketchItem[]>([]);
   const [drawText, setDrawText] = useState('');
   const [drawSending, setDrawSending] = useState(false);
-  const [refsOpen, setRefsOpen] = useState(false);
-  const [refsFiles, setRefsFiles] = useState<File[]>([]);
-  const [refsText, setRefsText] = useState('');
-  const [refsSending, setRefsSending] = useState(false);
   const drawCanvasRef = useRef<HTMLCanvasElement | null>(null) as React.MutableRefObject<HTMLCanvasElement | null>;
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const frameWrapRef = useRef<HTMLDivElement | null>(null);
-  const refsInputRef = useRef<HTMLInputElement | null>(null);
 
   function handleHandPan(dx: number, dy: number) {
     // Free pan via CSS translate — no bounds, drag the phone anywhere on the
@@ -2030,26 +2072,6 @@ function DevServerViewer({
     setDrawItems([]);
     setDrawText('');
     setInteract(false);
-  }
-
-  function closeRefs() {
-    setRefsOpen(false);
-    setRefsFiles([]);
-    setRefsText('');
-  }
-
-  async function sendRefs() {
-    if (!onSendToChat || refsFiles.length === 0 || refsSending) return;
-    setRefsSending(true);
-    try {
-      await onSendToChat(
-        refsText || 'Apply the changes shown in these reference images.',
-        refsFiles,
-      );
-      closeRefs();
-    } finally {
-      setRefsSending(false);
-    }
   }
 
   async function sendDrawAnnotation() {
@@ -2183,92 +2205,27 @@ function DevServerViewer({
                   </button>
                 ) : null}
               </div>
-              {mode === 'draw' ? (
-                <>
-                  <span className="viewer-divider" aria-hidden />
-                  <button
-                    type="button"
-                    className={`viewer-action${interact ? ' active' : ''}`}
-                    title={interact ? 'Back to drawing' : 'Interact with the app'}
-                    onClick={() => setInteract((v) => !v)}
-                  >
-                    <Icon name="play" size={13} />
-                    <span>Interact</span>
-                  </button>
-                </>
-              ) : null}
               <span className="viewer-divider" aria-hidden />
               <button
                 type="button"
-                className={`viewer-action${mobile ? ' active' : ''}`}
+                className={`viewer-action icon-only${mobile ? ' active' : ''}`}
                 title={mobile ? 'Switch to full width' : 'Switch to mobile width'}
+                aria-label={mobile ? 'Full width' : 'Mobile width'}
                 onClick={() => setMobile((v) => !v)}
               >
-                <Icon name="grid" size={13} />
-                <span>{mobile ? 'Mobile' : 'Full'}</span>
-              </button>
-              {onSendToChat ? (
-                <>
-                  <span className="viewer-divider" aria-hidden />
-                  <button
-                    type="button"
-                    className="viewer-action"
-                    title="Attach reference images describing the edits"
-                    onClick={() => refsInputRef.current?.click()}
-                  >
-                    <Icon name="image" size={13} />
-                    <span>Refs</span>
-                  </button>
-                  <input
-                    ref={refsInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    hidden
-                    onChange={(e) => {
-                      const files = Array.from(e.target.files ?? []);
-                      e.target.value = '';
-                      if (files.length === 0) return;
-                      setRefsFiles((curr) => [...curr, ...files]);
-                      setRefsOpen(true);
-                    }}
-                  />
-                </>
-              ) : null}
-              <span className="viewer-divider" aria-hidden />
-              <button
-                type="button"
-                className="icon-only"
-                title="Zoom out"
-                onClick={() => bumpZoom(-10)}
-                disabled={zoom <= 40}
-              >
-                <Icon name="minus" size={14} />
-              </button>
-              <button
-                type="button"
-                className="viewer-action"
-                title="Reset zoom and centre"
-                onClick={() => { setZoom(85); setPan({ x: 0, y: 0 }); }}
-                style={{ minWidth: 44, fontVariantNumeric: 'tabular-nums' }}
-              >
-                {zoom}%
-              </button>
-              <button
-                type="button"
-                className="icon-only"
-                title="Zoom in"
-                onClick={() => bumpZoom(10)}
-                disabled={zoom >= 150}
-              >
-                <Icon name="plus" size={14} />
+                <Icon name="grid" size={14} />
               </button>
               {onStop ? (
                 <>
                   <span className="viewer-divider" aria-hidden />
-                  <button type="button" className="viewer-action" onClick={onStop}>
-                    <Icon name="stop" size={13} />
-                    <span>Stop</span>
+                  <button
+                    type="button"
+                    className="viewer-action icon-only"
+                    title="Stop dev server"
+                    aria-label="Stop dev server"
+                    onClick={onStop}
+                  >
+                    <Icon name="stop" size={14} />
                   </button>
                 </>
               ) : null}
@@ -2298,6 +2255,49 @@ function DevServerViewer({
                 onSave={exitDraw}
                 onCancel={exitDraw}
                 onHandPan={handleHandPan}
+                toolbarLeft={
+                  <button
+                    type="button"
+                    className={`sketch-tool${interact ? ' active' : ''}`}
+                    title={interact ? 'Back to drawing' : 'Interact with the app'}
+                    aria-label="Interact"
+                    onClick={() => setInteract((v) => !v)}
+                  >
+                    <Icon name="pointer" size={14} />
+                  </button>
+                }
+                toolbarExtras={
+                  <>
+                    <button
+                      type="button"
+                      className="sketch-tool"
+                      title="Zoom out"
+                      aria-label="Zoom out"
+                      onClick={() => bumpZoom(-10)}
+                      disabled={zoom <= 40}
+                    >
+                      <Icon name="minus" size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="sketch-tool sketch-tool--zoom"
+                      title="Reset zoom and centre"
+                      onClick={() => { setZoom(85); setPan({ x: 0, y: 0 }); }}
+                    >
+                      {zoom}%
+                    </button>
+                    <button
+                      type="button"
+                      className="sketch-tool"
+                      title="Zoom in"
+                      aria-label="Zoom in"
+                      onClick={() => bumpZoom(10)}
+                      disabled={zoom >= 150}
+                    >
+                      <Icon name="plus" size={14} />
+                    </button>
+                  </>
+                }
               />
             </div>
             <div className="draw-compose-bar">
@@ -2329,61 +2329,6 @@ function DevServerViewer({
         ) : (
           frameWrap(iframeRef)
         )}
-        {refsOpen ? (
-          <div
-            className="refs-modal-backdrop"
-            onClick={() => { if (!refsSending) closeRefs(); }}
-          >
-            <div className="refs-modal" onClick={(e) => e.stopPropagation()}>
-              <div className="refs-modal-title">Attach reference images</div>
-              <div className="refs-modal-thumbs">
-                {refsFiles.map((f, i) => (
-                  <div key={`${f.name}-${i}`} className="refs-modal-thumb">
-                    <img src={URL.createObjectURL(f)} alt={f.name} />
-                    <button
-                      type="button"
-                      title="Remove"
-                      onClick={() => setRefsFiles((curr) => curr.filter((_, j) => j !== i))}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  className="refs-modal-add"
-                  title="Add more"
-                  onClick={() => refsInputRef.current?.click()}
-                >
-                  +
-                </button>
-              </div>
-              <textarea
-                className="refs-modal-input"
-                placeholder="Describe what to change based on these references… (optional)"
-                value={refsText}
-                onChange={(e) => setRefsText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    void sendRefs();
-                  }
-                }}
-              />
-              <div className="refs-modal-actions">
-                <span className="refs-modal-hint">⌘↵ to send</span>
-                <button className="ghost" onClick={closeRefs} disabled={refsSending}>Cancel</button>
-                <button
-                  className="primary"
-                  disabled={refsSending || refsFiles.length === 0}
-                  onClick={() => void sendRefs()}
-                >
-                  {refsSending ? 'Sending…' : 'Send to Claude'}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </div>
     </div>
   );
