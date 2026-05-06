@@ -1386,17 +1386,19 @@ export function ProjectView({
               void stopDevServer(project.id);
               setDevServerUrl(null);
             }}
-            onSendToChat={async (text, imageFile) => {
+            onSendToChat={async (text, imageFiles) => {
               const id = await handleEnsureProject();
               if (!id) return;
               let attachments: ChatAttachment[] = [];
-              if (imageFile) {
-                const result = await uploadProjectFiles(id, [imageFile]);
-                const uploaded = result.uploaded[0];
-                if (uploaded) {
-                  attachments = [{ path: uploaded.path, name: uploaded.name, kind: 'image', size: uploaded.size }];
-                  void refreshProjectFiles();
-                }
+              if (imageFiles && imageFiles.length > 0) {
+                const result = await uploadProjectFiles(id, imageFiles);
+                attachments = result.uploaded.map((u) => ({
+                  path: u.path,
+                  name: u.name,
+                  kind: 'image',
+                  size: u.size,
+                }));
+                if (attachments.length > 0) void refreshProjectFiles();
               }
               void handleSend(text, attachments);
             }}
@@ -1449,34 +1451,30 @@ function DevServerViewer({
   url: string | null;
   projectName: string;
   onStop: (() => void) | null;
-  onSendToChat: ((text: string, imageFile?: File) => Promise<void> | void) | null;
+  onSendToChat: ((text: string, imageFiles?: File[]) => Promise<void> | void) | null;
 }) {
   const [mobile, setMobile] = useState(true);
   const [zoom, setZoom] = useState(85);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [mode, setMode] = useState<'preview' | 'draw'>('preview');
   const [interact, setInteract] = useState(false);
   const [drawItems, setDrawItems] = useState<SketchItem[]>([]);
   const [drawText, setDrawText] = useState('');
   const [drawSending, setDrawSending] = useState(false);
+  const [refsOpen, setRefsOpen] = useState(false);
+  const [refsFiles, setRefsFiles] = useState<File[]>([]);
+  const [refsText, setRefsText] = useState('');
+  const [refsSending, setRefsSending] = useState(false);
   const drawCanvasRef = useRef<HTMLCanvasElement | null>(null) as React.MutableRefObject<HTMLCanvasElement | null>;
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const frameWrapRef = useRef<HTMLDivElement | null>(null);
+  const refsInputRef = useRef<HTMLInputElement | null>(null);
 
   function handleHandPan(dx: number, dy: number) {
-    // 1. Scroll the frame-wrap container (pans visible area of the phone).
-    const wrap = frameWrapRef.current;
-    if (wrap) {
-      wrap.scrollTop -= dy;
-      wrap.scrollLeft -= dx;
-    }
-    // 2. Best-effort: dispatch a wheel event to the iframe element so Chromium
-    //    may forward it to the iframe's scroll containers.
-    const iframe = iframeRef.current;
-    if (iframe) {
-      iframe.dispatchEvent(
-        new WheelEvent('wheel', { deltaX: -dx, deltaY: -dy, deltaMode: 0, bubbles: true }),
-      );
-    }
+    // Free pan via CSS translate — no bounds, drag the phone anywhere on the
+    // canvas. Cross-origin iframes block JS from scrolling the app's own
+    // content; for that, use Interact mode.
+    setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
   }
 
   function bumpZoom(delta: number) {
@@ -1490,39 +1488,102 @@ function DevServerViewer({
     setInteract(false);
   }
 
+  function closeRefs() {
+    setRefsOpen(false);
+    setRefsFiles([]);
+    setRefsText('');
+  }
+
+  async function sendRefs() {
+    if (!onSendToChat || refsFiles.length === 0 || refsSending) return;
+    setRefsSending(true);
+    try {
+      await onSendToChat(
+        refsText || 'Apply the changes shown in these reference images.',
+        refsFiles,
+      );
+      closeRefs();
+    } finally {
+      setRefsSending(false);
+    }
+  }
+
   async function sendDrawAnnotation() {
     if (drawSending || !onSendToChat) return;
     setDrawSending(true);
     try {
-      let imageFile: File | undefined;
-      const cvs = drawCanvasRef.current;
-      if (cvs && drawItems.length > 0) {
-        imageFile = await new Promise<File | undefined>((res) => {
-          cvs.toBlob((blob) => {
-            res(blob ? new File([blob], 'draw-annotation.png', { type: 'image/png' }) : undefined);
-          }, 'image/png');
-        });
-      }
-      await onSendToChat(drawText || 'See the annotation.', imageFile);
+      const imageFile = await captureAnnotatedFrame();
+      await onSendToChat(drawText || 'See the annotation.', imageFile ? [imageFile] : undefined);
       exitDraw();
     } finally {
       setDrawSending(false);
     }
   }
 
+  // Compose the iframe screenshot under the user's drawing strokes.
+  // Cross-origin iframes can't be read from JS, so we ask Electron's
+  // webContents.capturePage() (which sees through cross-origin) for the
+  // iframe's screen region, then draw the sketch canvas on top.
+  // Falls back to drawings-only when not running in Electron.
+  async function captureAnnotatedFrame(): Promise<File | undefined> {
+    const cvs = drawCanvasRef.current;
+    const iframe = iframeRef.current;
+    if (!cvs || drawItems.length === 0) return undefined;
+    const capture = window.electronAPI?.captureRegion;
+    if (!capture || !iframe) {
+      return canvasToFile(cvs, 'draw-annotation.png');
+    }
+    try {
+      const rect = iframe.getBoundingClientRect();
+      const dataUrl = await capture({
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      });
+      const out = document.createElement('canvas');
+      out.width = Math.round(rect.width);
+      out.height = Math.round(rect.height);
+      const ctx = out.getContext('2d');
+      if (!ctx) return canvasToFile(cvs, 'draw-annotation.png');
+      // Background: the live screenshot of the iframe area.
+      const bg = await loadImage(dataUrl);
+      ctx.drawImage(bg, 0, 0, out.width, out.height);
+      // Foreground: align the sketch canvas (which spans the draw-preview-layer)
+      // to the iframe rect. The canvas covers the whole layer, so we offset.
+      const cvsRect = cvs.getBoundingClientRect();
+      const offsetX = cvsRect.left - rect.left;
+      const offsetY = cvsRect.top - rect.top;
+      ctx.drawImage(cvs, offsetX, offsetY, cvsRect.width, cvsRect.height);
+      return canvasToFile(out, 'draw-annotation.png');
+    } catch {
+      return canvasToFile(cvs, 'draw-annotation.png');
+    }
+  }
+
   const scale = zoom / 100;
-  // transform-origin: top center — the phone shrinks downward.
-  // Compensate layout height so the frame-wrap hugs the visible phone.
+  // Scale the phone from its centre + apply unbounded translate from the hand-tool pan.
+  // Translate is in outer (unscaled) coordinate space, so dragging 100px on screen
+  // moves the phone 100px on screen regardless of zoom level.
   const phoneH = 844;
+  const marginComp = `${(scale - 1) * phoneH / 2}px`;
   const frameStyle: React.CSSProperties | undefined = mobile
     ? {
-        transform: `scale(${scale})`,
-        transformOrigin: 'top center',
-        // Pull up the empty space below after scaling down
-        marginBottom: `${(scale - 1) * phoneH}px`,
+        transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+        transformOrigin: 'center center',
+        marginTop: marginComp,
+        marginBottom: marginComp,
       }
-    : undefined;
+    : pan.x !== 0 || pan.y !== 0
+      ? { transform: `translate(${pan.x}px, ${pan.y}px)` }
+      : undefined;
 
+  // Load the dev server directly. The proxy approach (rewriting HTML through
+  // /api/projects/:id/dev-html) broke Next.js / Vite apps because their JS
+  // does fetch('/api/...') and WebSocket HMR using the page origin — which
+  // would point at our daemon, not their dev server. The cost: the iframe is
+  // cross-origin, so the hand tool can't scroll the app's internal content
+  // (only the frame-wrap). Use Interact mode for in-app scrolling.
   const frameWrap = (ref?: React.MutableRefObject<HTMLIFrameElement | null>) => (
     <div className={`dev-server-frame-wrap${mobile ? ' mobile' : ''}`} ref={frameWrapRef}>
       <iframe
@@ -1602,6 +1663,34 @@ function DevServerViewer({
                 <Icon name="grid" size={13} />
                 <span>{mobile ? 'Mobile' : 'Full'}</span>
               </button>
+              {onSendToChat ? (
+                <>
+                  <span className="viewer-divider" aria-hidden />
+                  <button
+                    type="button"
+                    className="viewer-action"
+                    title="Attach reference images describing the edits"
+                    onClick={() => refsInputRef.current?.click()}
+                  >
+                    <Icon name="image" size={13} />
+                    <span>Refs</span>
+                  </button>
+                  <input
+                    ref={refsInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? []);
+                      e.target.value = '';
+                      if (files.length === 0) return;
+                      setRefsFiles((curr) => [...curr, ...files]);
+                      setRefsOpen(true);
+                    }}
+                  />
+                </>
+              ) : null}
               <span className="viewer-divider" aria-hidden />
               <button
                 type="button"
@@ -1615,8 +1704,8 @@ function DevServerViewer({
               <button
                 type="button"
                 className="viewer-action"
-                title="Reset zoom"
-                onClick={() => setZoom(85)}
+                title="Reset zoom and centre"
+                onClick={() => { setZoom(85); setPan({ x: 0, y: 0 }); }}
                 style={{ minWidth: 44, fontVariantNumeric: 'tabular-nums' }}
               >
                 {zoom}%
@@ -1696,9 +1785,81 @@ function DevServerViewer({
         ) : (
           frameWrap(iframeRef)
         )}
+        {refsOpen ? (
+          <div
+            className="refs-modal-backdrop"
+            onClick={() => { if (!refsSending) closeRefs(); }}
+          >
+            <div className="refs-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="refs-modal-title">Attach reference images</div>
+              <div className="refs-modal-thumbs">
+                {refsFiles.map((f, i) => (
+                  <div key={`${f.name}-${i}`} className="refs-modal-thumb">
+                    <img src={URL.createObjectURL(f)} alt={f.name} />
+                    <button
+                      type="button"
+                      title="Remove"
+                      onClick={() => setRefsFiles((curr) => curr.filter((_, j) => j !== i))}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="refs-modal-add"
+                  title="Add more"
+                  onClick={() => refsInputRef.current?.click()}
+                >
+                  +
+                </button>
+              </div>
+              <textarea
+                className="refs-modal-input"
+                placeholder="Describe what to change based on these references… (optional)"
+                value={refsText}
+                onChange={(e) => setRefsText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    void sendRefs();
+                  }
+                }}
+              />
+              <div className="refs-modal-actions">
+                <span className="refs-modal-hint">⌘↵ to send</span>
+                <button className="ghost" onClick={closeRefs} disabled={refsSending}>Cancel</button>
+                <button
+                  className="primary"
+                  disabled={refsSending || refsFiles.length === 0}
+                  onClick={() => void sendRefs()}
+                >
+                  {refsSending ? 'Sending…' : 'Send to Claude'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
+}
+
+function canvasToFile(cvs: HTMLCanvasElement, name: string): Promise<File | undefined> {
+  return new Promise((res) => {
+    cvs.toBlob((blob) => {
+      res(blob ? new File([blob], name, { type: 'image/png' }) : undefined);
+    }, 'image/png');
+  });
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = (err) => reject(err);
+    img.src = src;
+  });
 }
 
 function artifactExtensionFor(art: Artifact): '.html' | '.jsx' | '.tsx' {

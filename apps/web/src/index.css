@@ -2092,12 +2092,12 @@ code {
   background: #fff;
 }
 
-/* Mobile mode: phone-shaped frame, scrollable when content is taller */
+/* Mobile mode: phone-shaped frame. The hand tool pans via CSS translate,
+   so the wrap clips overflow rather than scrolling. */
 .dev-server-frame-wrap.mobile {
-  overflow-y: auto;
-  overflow-x: hidden;
-  align-items: flex-start;
-  padding: 16px 0;
+  overflow: hidden;
+  align-items: safe center;
+  padding: 24px 0;
 }
 .dev-server-frame-wrap.mobile .dev-server-frame,
 .dev-server-viewer .viewer-body .dev-server-frame-wrap.mobile .dev-server-frame {
@@ -2121,10 +2121,10 @@ code {
   width: 100%;
   height: 100%;
 }
-/* Mobile inside draw mode: allow scroll + start from top */
+/* Mobile inside draw mode: clip translated phone, centre initially */
 .dev-server-viewer .draw-preview-layer .dev-server-frame-wrap.mobile {
-  overflow-y: auto;
-  align-items: flex-start;
+  overflow: hidden;
+  align-items: safe center;
 }
 
 /* Hand tool cursor — pointer-events stay on canvas (drag is handled in JS) */
@@ -9391,3 +9391,91 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   color: var(--text-muted);
 }
 .taste-confirm-no:hover { background: var(--bg-subtle); }
+
+/* ===== Reference-images attach modal (DevServerViewer) ===== */
+.refs-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.refs-modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  width: min(560px, 92%);
+  max-height: 85%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+}
+.refs-modal-title { font-weight: 600; font-size: 14px; color: var(--text); }
+.refs-modal-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+.refs-modal-thumb {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+.refs-modal-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.refs-modal-thumb button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.refs-modal-add {
+  width: 84px;
+  height: 84px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 26px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.refs-modal-add:hover { background: var(--bg-subtle); color: var(--text); }
+.refs-modal-input {
+  resize: vertical;
+  min-height: 84px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+.refs-modal-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
+.refs-modal-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.refs-modal-hint { font-size: 11px; color: var(--text-muted); margin-right: auto; }

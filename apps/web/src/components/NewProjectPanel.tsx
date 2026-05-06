@@ -4,6 +4,7 @@ declare global {
   interface Window {
     electronAPI?: {
       pickFolder: () => Promise<string | null>;
+      captureRegion?: (rect: { x: number; y: number; width: number; height: number }) => Promise<string>;
     };
   }
 }

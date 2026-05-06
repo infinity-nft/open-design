@@ -217,6 +217,25 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     });
   }
 
+  // capture:region — Electron's webContents.capturePage() can grab cross-origin
+  // iframe content (which the renderer's JS cannot), so the Draw mode uses it
+  // to composite the visible app under the user's annotations.
+  if (!ipcMain.eventNames().includes("capture:region")) {
+    ipcMain.handle("capture:region", async (event, rect: { x: number; y: number; width: number; height: number }) => {
+      const wc = event.sender;
+      const win = BrowserWindow.fromWebContents(wc);
+      if (!win || win.isDestroyed()) throw new Error("window destroyed");
+      const r = {
+        x: Math.max(0, Math.round(rect.x)),
+        y: Math.max(0, Math.round(rect.y)),
+        width: Math.max(1, Math.round(rect.width)),
+        height: Math.max(1, Math.round(rect.height)),
+      };
+      const image = await win.webContents.capturePage(r);
+      return image.toDataURL();
+    });
+  }
+
   const consoleEntries: DesktopConsoleEntry[] = [];
   const window = new BrowserWindow({
     height: 900,
