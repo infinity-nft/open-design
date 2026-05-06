@@ -34,6 +34,7 @@ import {
   createProject,
   deleteProject as deleteProjectApi,
   importClaudeDesignZip,
+  importFolderProject,
   listProjects,
   listTemplates,
   patchProject,
@@ -365,6 +366,17 @@ export function App() {
     });
   }, []);
 
+  const handleImportFolder = useCallback(async (baseDir: string) => {
+    const result = await importFolderProject({ baseDir });
+    if (!result) return;
+    setProjects((curr) => [result.project, ...curr.filter((p) => p.id !== result.project.id)]);
+    navigate({
+      kind: 'project',
+      projectId: result.project.id,
+      fileName: result.entryFile,
+    });
+  }, []);
+
   const handleOpenProject = useCallback((id: string) => {
     navigate({ kind: 'project', projectId: id, fileName: null });
   }, []);
@@ -556,6 +568,7 @@ export function App() {
           loading={bootstrapping}
           onCreateProject={handleCreateProject}
           onImportClaudeDesign={handleImportClaudeDesign}
+          onImportFolder={handleImportFolder}
           onOpenProject={handleOpenProject}
           onOpenLiveArtifact={handleOpenLiveArtifact}
           onDeleteProject={handleDeleteProject}

@@ -2238,6 +2238,31 @@ code {
   display: block;
   flex: 0 0 auto;
 }
+.newproj-open-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+.newproj-folder-input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, var(--bg));
+  color: var(--text);
+  box-sizing: border-box;
+}
+.newproj-folder-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.newproj-folder-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
 .newproj-footer {
   padding: 0 18px 16px;
   font-size: 11px;
