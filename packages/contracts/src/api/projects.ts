@@ -182,7 +182,7 @@ export interface MessagesResponse {
   messages: ChatMessage[];
 }
 
-export type DeployProviderId = 'vercel-self';
+export type DeployProviderId = 'vercel-self' | 'cloudflare-pages';
 export type DeploymentStatus =
   | 'deploying'
   | 'preparing-link'
@@ -197,13 +197,18 @@ export interface DeployConfigResponse {
   tokenMask: string;
   teamId: string;
   teamSlug: string;
+  accountId?: string;
+  projectName?: string;
   target: 'preview';
 }
 
 export interface UpdateDeployConfigRequest {
+  providerId?: DeployProviderId;
   token?: string;
   teamId?: string;
   teamSlug?: string;
+  accountId?: string;
+  projectName?: string;
 }
 
 export interface DeploymentInfo {
@@ -218,6 +223,7 @@ export interface DeploymentInfo {
   status: DeploymentStatus;
   statusMessage?: string;
   reachableAt?: number;
+  providerMetadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
 }
