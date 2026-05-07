@@ -2009,7 +2009,7 @@ export async function startServer({
   let daemonUrl = `http://127.0.0.1:${port}`;
 
   // Wire the upload destination (defined at module scope) to this db so it can
-  // route files into a git-linked folder when the project has folderPath set.
+  // route files into a git-linked folder when the project has baseDir set.
   projectMetadataLookup = (id: string) => {
     try { return getProject(db, id)?.metadata ?? null; } catch { return null; }
   };
@@ -2805,13 +2805,13 @@ export async function startServer({
       }
 
       // Resolve cwd through realpath and verify it's still inside the
-      // canonical folderPath. Without this, ds.cwd = "../../etc" would
+      // canonical baseDir. Without this, ds.cwd = "../../etc" would
       // make the spawn run with cwd outside the imported folder.
-      const folderPath = project.metadata?.folderPath ?? project.metadata?.originalFolderPath;
-      if (typeof folderPath !== 'string') return sendApiError(res, 400, 'BAD_REQUEST', 'project has no folder path');
+      const baseDir = project.metadata?.baseDir;
+      if (typeof baseDir !== 'string') return sendApiError(res, 400, 'BAD_REQUEST', 'project has no folder path');
       let canonicalFolder: string;
       try {
-        canonicalFolder = await fs.promises.realpath(folderPath);
+        canonicalFolder = await fs.promises.realpath(baseDir);
       } catch {
         return sendApiError(res, 400, 'BAD_REQUEST', 'folder no longer exists on disk');
       }
@@ -2823,7 +2823,7 @@ export async function startServer({
         return sendApiError(res, 400, 'BAD_REQUEST', 'devServer.cwd does not exist');
       }
       if (cwd !== canonicalFolder && !cwd.startsWith(canonicalFolder + path.sep)) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'devServer.cwd escapes folderPath');
+        return sendApiError(res, 400, 'BAD_REQUEST', 'devServer.cwd escapes baseDir');
       }
 
       // Free the port if WE hold it from a previous run. We refuse to
