@@ -322,7 +322,7 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     show: true,
     title: "Open Design",
     ...MAC_WINDOW_CHROME,
-    webPreferences: WINDOW_WEB_PREFERENCES,
+    webPreferences: { ...WINDOW_WEB_PREFERENCES, preload: preloadPath },
     width: 1280,
   });
   installWindowChromeCssHook(window);
