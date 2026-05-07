@@ -474,9 +474,9 @@ export function ProjectView({
     }
   }, [streaming, messages, config.notifications, t]);
 
-  // Auto-start dev server for folder-imported projects that have a devServer config.
-  // Start the dev server for the current project. Used both by the auto-
-  // start effect on mount and by the user-facing Start button after Stop.
+  // Start the dev server for the current project. Triggered by the user's
+  // Play button — never auto-fires on mount, so opening a folder lands you
+  // in the file browser and you choose when (or whether) to run the project.
   const handleStartDevServer = useCallback(() => {
     if (!project.metadata?.devServer) return;
     setDevServerStarting(true);
@@ -486,17 +486,12 @@ export function ProjectView({
     });
   }, [project.id, project.metadata?.devServer]);
 
+  // Tear down the dev server when leaving the project so we don't leak the
+  // child process across project switches. No auto-start side — that lives
+  // behind the Play button.
   useEffect(() => {
     if (!project.metadata?.devServer) return;
-    let cancelled = false;
-    setDevServerStarting(true);
-    void startDevServer(project.id).then((result) => {
-      if (cancelled) return;
-      setDevServerStarting(false);
-      if (result?.url) setDevServerUrl(result.url);
-    });
     return () => {
-      cancelled = true;
       void stopDevServer(project.id);
       setDevServerUrl(null);
       setDevServerStarting(false);
@@ -1955,78 +1950,66 @@ export function ProjectView({
           />
         ) : devServerStarting ? (
           <DevServerViewer url={null} projectName={project.name} onStop={null} onSendToChat={null} />
-        ) : project.metadata?.devServer ? (
-          <div className="dev-server-stopped-wrap">
-            <div className="dev-server-stopped-banner">
-              <span className="dev-server-stopped-banner-status">
-                <span className="dev-server-dot stopped" aria-hidden />
-                Dev server stopped
-              </span>
-              <button
-                type="button"
-                className="dev-server-stopped-banner-action"
-                onClick={handleStartDevServer}
-              >
-                <Icon name="play" size={13} />
-                Start
-              </button>
-            </div>
-            <FileWorkspace
-              projectId={project.id}
-              files={projectFiles}
-              liveArtifacts={liveArtifacts}
-              onRefreshFiles={() => {
-                void refreshWorkspaceItems();
-              }}
-              isDeck={isDeck}
-              onExportAsPptx={handleExportAsPptx}
-              streaming={streaming}
-              openRequest={openRequest}
-              liveArtifactEvents={liveArtifactEvents}
-              tabsState={openTabsState}
-              onTabsStateChange={persistTabsState}
-              previewComments={previewComments}
-              onSavePreviewComment={savePreviewComment}
-              onRemovePreviewComment={removePreviewComment}
-              onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
-            />
-          </div>
         ) : (
-          <FileWorkspace
-            projectId={project.id}
-            files={projectFiles}
-            liveArtifacts={liveArtifacts}
-            onRefreshFiles={() => {
-              void refreshWorkspaceItems();
-            }}
-            isDeck={isDeck}
-            onExportAsPptx={handleExportAsPptx}
-            streaming={streaming}
-            openRequest={openRequest}
-            liveArtifactEvents={liveArtifactEvents}
-            tabsState={openTabsState}
-            onTabsStateChange={persistTabsState}
-            previewComments={previewComments}
-            onSavePreviewComment={savePreviewComment}
-            onRemovePreviewComment={removePreviewComment}
-            onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
-            focusMode={workspaceFocused}
-            onFocusModeChange={setWorkspaceFocused}
-            onSendToChat={async (text, imageFile) => {
-              const id = await handleEnsureProject();
-              if (!id) return;
-              let attachments: ChatAttachment[] = [];
-              if (imageFile) {
-                const result = await uploadProjectFiles(id, [imageFile]);
-                const uploaded = result.uploaded[0];
-                if (uploaded) {
-                  attachments = [{ path: uploaded.path, name: uploaded.name, kind: 'image', size: uploaded.size }];
-                  void refreshProjectFiles();
-                }
-              }
-              void handleSend(text, attachments);
-            }}
-          />
+          (() => {
+            const workspace = (
+              <FileWorkspace
+                projectId={project.id}
+                files={projectFiles}
+                liveArtifacts={liveArtifacts}
+                onRefreshFiles={() => {
+                  void refreshWorkspaceItems();
+                }}
+                isDeck={isDeck}
+                onExportAsPptx={handleExportAsPptx}
+                streaming={streaming}
+                openRequest={openRequest}
+                liveArtifactEvents={liveArtifactEvents}
+                tabsState={openTabsState}
+                onTabsStateChange={persistTabsState}
+                previewComments={previewComments}
+                onSavePreviewComment={savePreviewComment}
+                onRemovePreviewComment={removePreviewComment}
+                onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
+                focusMode={workspaceFocused}
+                onFocusModeChange={setWorkspaceFocused}
+                onSendToChat={async (text, imageFile) => {
+                  const id = await handleEnsureProject();
+                  if (!id) return;
+                  let attachments: ChatAttachment[] = [];
+                  if (imageFile) {
+                    const result = await uploadProjectFiles(id, [imageFile]);
+                    const uploaded = result.uploaded[0];
+                    if (uploaded) {
+                      attachments = [{ path: uploaded.path, name: uploaded.name, kind: 'image', size: uploaded.size }];
+                      void refreshProjectFiles();
+                    }
+                  }
+                  void handleSend(text, attachments);
+                }}
+              />
+            );
+            if (!project.metadata?.devServer) return workspace;
+            return (
+              <div className="dev-server-stopped-wrap">
+                <div className="dev-server-stopped-banner">
+                  <span className="dev-server-stopped-banner-status">
+                    <span className="dev-server-dot stopped" aria-hidden />
+                    Dev server stopped
+                  </span>
+                  <button
+                    type="button"
+                    className="dev-server-stopped-banner-action"
+                    onClick={handleStartDevServer}
+                  >
+                    <Icon name="play" size={13} />
+                    Start
+                  </button>
+                </div>
+                {workspace}
+              </div>
+            );
+          })()
         )}
       </div>
     </div>
