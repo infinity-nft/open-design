@@ -89,7 +89,7 @@ export interface ProjectMetadata {
   // Dev server config for folder-imported projects (Next.js, Vite, CRA, etc.)
   devServer?: {
     script: string;  // e.g. "npm run dev"
-    cwd: string;     // relative subdir inside folderPath where script runs
+    cwd: string;     // relative subdir inside baseDir where script runs
     port: number;    // port the server listens on
   };
 }
