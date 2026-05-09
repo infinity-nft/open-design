@@ -30,7 +30,7 @@ interface SkillFrontmatter extends JsonRecord {
   name?: unknown;
   description?: unknown;
   triggers?: unknown;
-  od?: JsonRecord & { craft?: JsonRecord; preview?: JsonRecord; design_system?: JsonRecord };
+  od?: JsonRecord & { craft?: JsonRecord; preview?: JsonRecord; design_system?: JsonRecord; goldens?: JsonRecord & { max?: number } };
 }
 
 export interface SkillInfo {
@@ -54,6 +54,7 @@ export interface SkillInfo {
   examplePrompt: string;
   aggregatesExamples: boolean;
   body: string;
+  goldens: SkillGolden[];
   dir: string;
 }
 
@@ -210,6 +211,7 @@ export async function listSkills(skillsRoot: string): Promise<SkillInfo[]> {
           // compose an empty system prompt and the agent would have no
           // skill instructions.
           body: parentBody,
+          goldens: [],
           dir,
         });
       }

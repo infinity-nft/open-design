@@ -1062,6 +1062,7 @@ export function SettingsDialog({
     privacy: { title: t('settings.privacy'), subtitle: t('settings.privacyHint') },
     pet: { title: t('pet.title'), subtitle: t('pet.subtitle') },
     library: { title: t('settings.library'), subtitle: t('settings.libraryHint') },
+    taste: { title: 'Taste memory', subtitle: 'Personalisation signals' },
     about: { title: t('settings.about'), subtitle: t('settings.aboutHint') },
   };
   const activeHeader = sectionHeader[activeSection];
